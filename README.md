@@ -2,10 +2,6 @@
 文末是GiantPandaCV公众号做的多期源码详细解析，在这个工程里你能看到最全的DarkNet代码注释，以及你会明白DarkNet是如何从你标注的数据获得最终的目标框的，你会学到DarkNet的数据结构组织方式，网络以及每个Layer的前向传播和反向传播，以及YOLOV1，V2，V3，GaussianYOLO，TrideNet，CSPNet, PRN, EfficientNet等最SOTA的模型，最后你还能学到GIOU，DIOU，CIOU， Focal Loss等最经典和先进的Loss。公众号的源码解析见最后。
 
 
-
-[TOC]
-
-
 下图是CSPNet中统计的目前的State of the Art的目标检测模型。其中从csresnext50-panet-spp-optimal模型是CSPNet中提出来的，可以结合AlexeyAB版本的Darknet就可以实现。
 
 ![](https://img-blog.csdnimg.cn/20200109223251119.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
