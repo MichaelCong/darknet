@@ -1,578 +1,712 @@
+# Yolo v4, v3 and v2 for Windows and Linux
 
-文末是GiantPandaCV公众号做的多期源码详细解析，在这个工程里你能看到最全的DarkNet代码注释，以及你会明白DarkNet是如何从你标注的数据获得最终的目标框的，你会学到DarkNet的数据结构组织方式，网络以及每个Layer的前向传播和反向传播，以及YOLOV1，V2，V3，GaussianYOLO，TrideNet，CSPNet, PRN, EfficientNet等最SOTA的模型，最后你还能学到GIOU，DIOU，CIOU， Focal Loss等最经典和先进的Loss。公众号的源码解析见最后。
+## (neural networks for object detection)
 
+Paper YOLO v4: https://arxiv.org/abs/2004.10934
 
-下图是CSPNet中统计的目前的State of the Art的目标检测模型。其中从csresnext50-panet-spp-optimal模型是CSPNet中提出来的，可以结合AlexeyAB版本的Darknet就可以实现。
+Paper Scaled YOLO v4: https://arxiv.org/abs/2011.08036  use to reproduce results: [ScaledYOLOv4](https://github.com/WongKinYiu/ScaledYOLOv4)
 
-![](https://img-blog.csdnimg.cn/20200109223251119.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
+More details in articles on medium: 
+ * [Scaled_YOLOv4](https://alexeyab84.medium.com/scaled-yolo-v4-is-the-best-neural-network-for-object-detection-on-ms-coco-dataset-39dfa22fa982?source=friends_link&sk=c8553bfed861b1a7932f739d26f487c8) 
+ * [YOLOv4](https://medium.com/@alexeyab84/yolov4-the-most-accurate-real-time-neural-network-on-ms-coco-dataset-73adfd3602fe?source=friends_link&sk=6039748846bbcf1d960c3061542591d7) 
 
-## 1. 依赖
+Manual: https://github.com/AlexeyAB/darknet/wiki
 
-### 1.1 环境要求
+Discussion: 
+ - [Reddit](https://www.reddit.com/r/MachineLearning/comments/gydxzd/p_yolov4_the_most_accurate_realtime_neural/)
+ - [Google-groups](https://groups.google.com/forum/#!forum/darknet)
+ - [Discord](https://discord.gg/zSq8rtW)
 
-- window系统或者linux系统。
-- CMake版本高于3.8。
-- CUDA 10.0，cuDNN>=7.0。
-- OpenCV版本高于2.4。
-- Linux下需要GCC 或者Clang, Window下需要Visual Studio 15、17或19版。
+About Darknet framework: http://pjreddie.com/darknet/
 
-### 1.2 数据集获取
-
-1. MS COCO数据集: 使用`./scripits/get_coco_dataset.sh`来获取数据集。
-2. OpenImages数据集: 使用`./scripits/get_openimages_dataset.py`获取数据集,并按照规定的格式重排训练集。
-3. Pascal VOC数据集: 使用`./scripits/voc_label.py`对数据集标注进行处理。
-4. ILSVRC2012数据集(ImageNet Classification): 使用`./scripits/get_imagenet_train.sh`获取数据集，运行`./scripits/imagenet_label.sh`用于验证集。
-5. German/Belgium/Russian/LISA/MASTIF 交通标志数据集。
-6. 其他数据集，请访问`https://github.com/AlexeyAB/darknet/tree/master/scripts#datasets`
-
-结果示意：
-
-![1578922944407](https://img-blog.csdnimg.cn/20200113221728380.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
-
-其他测试结果可以访问:`https://www.youtube.com/user/pjreddie/videos`
-
-## 2. 相比原作者Darknet的改进
-
-- 添加了对windows下运行darknet的支持。
-- 添加了SOTA模型： CSPNet, PRN, EfficientNet。
-- 在官方Darknet的基础上添加了新的层：[conv\_lstm], [scale_channels] SE/ASFF/BiFPN, [local_avgpool], [sam], [Gaussian_yolo], [reorg3d] (修复 [reorg]), 修复 [batchnorm]。
-- 可以使用`[conv_lstm]`层或者`[crnn]`层来实现针对视频的目标检测。
-- 添加了多种数据增强策略: `[net] mixup=1 cutmix=1 mosaic=1 blur=1`。
-- 添加了多种激活函数: SWISH, MISH, NORM\_CHAN, NORM\CHAN\_SOFTMAX。
-- 增加了使用CPU-RAM提高GPU处理训练的能力，以增加`mini_batch_size`和准确性。
-- 提升了二值网络，让其在CPU和GPU上的训练和测试速度变为原来的2-4倍。
-- 通过将Convolutional层和Batch-Norm层合并成一个层，提升了约7%速度。
-- 如果在Makefile中使用CUDNN_HALF参数，可以让网络在TeslaV100，GeForce RTX等型号的GPU上的检测速度提升两倍。
-- 针对视频的检测进行了优化，对高清视频检测速度可以提升1.2倍，对4k的视频检测速度可以提升2倍。
-- 数据增强部分使用Opencv SSE/AVX指令优化了原来朴素实现的数据增强，数据增强速度提升为原来的3.5倍。
-- 在CPU上使用AVX指令来提高了检测速度，yolov3提高了约85%。
-- 在网络多尺度训练（`random=1`）的时候优化了内存分配。
-- 优化了检测时的GPU初始化策略，在bacth=1的时候执行初始化而不是当batch=1的时候重新初始化。
-- 添加了计算mAP,F1,IoU, Precision-Recall等指标的方法，只需要运行`darknet detector map`命令即可。
-- 支持在训练的过程中画loss曲线和准确率曲线，只需要添加`-map`标志即可。
-- 提供了`-json_port`,`-mjpeg_port`选项，支持作为json和mjpeg 服务器来在线获取的结果。可以使用你的编写的软件或者web浏览器与**json和mjpeg服务器**连接。
-- 添加了Anchor的计算功能，可以根据数据集来聚类得到合适的Anchor。
-- 添加了一些目标检测和目标跟踪的示例：`https://github.com/AlexeyAB/darknet/blob/master/src/yolo_console_dll.cpp`
-- 在使用错误的cfg文件或者数据集的时候，添加了运行时的建议和警告。
-- 其它一些代码修复。
+[![Darknet Continuous Integration](https://github.com/AlexeyAB/darknet/workflows/Darknet%20Continuous%20Integration/badge.svg)](https://github.com/AlexeyAB/darknet/actions?query=workflow%3A%22Darknet+Continuous+Integration%22)
+[![CircleCI](https://circleci.com/gh/AlexeyAB/darknet.svg?style=svg)](https://circleci.com/gh/AlexeyAB/darknet)
+[![TravisCI](https://travis-ci.org/AlexeyAB/darknet.svg?branch=master)](https://travis-ci.org/AlexeyAB/darknet)
+[![Contributors](https://img.shields.io/github/contributors/AlexeyAB/Darknet.svg)](https://github.com/AlexeyAB/darknet/graphs/contributors)
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://github.com/AlexeyAB/darknet/blob/master/LICENSE)
+[![DOI](https://zenodo.org/badge/75388965.svg)](https://zenodo.org/badge/latestdoi/75388965)
+[![arxiv.org](http://img.shields.io/badge/cs.CV-arXiv%3A2004.10934-B31B1B.svg)](https://arxiv.org/abs/2004.10934)
+[![colab](https://user-images.githubusercontent.com/4096485/86174089-b2709f80-bb29-11ea-9faf-3d8dc668a1a5.png)](https://colab.research.google.com/drive/12QusaaRj_lUwCGDvQNfICpa7kA7_a2dE)
+[![colab](https://user-images.githubusercontent.com/4096485/86174097-b56b9000-bb29-11ea-9240-c17f6bacfc34.png)](https://colab.research.google.com/drive/1_GdoqCJWXsChrOiY8sZMr_zbr_fH-0Fg)
 
 
-## 3. 命令行使用
+* [YOLOv4 model zoo](https://github.com/AlexeyAB/darknet/wiki/YOLOv4-model-zoo)
+* [Requirements (and how to install dependecies)](#requirements)
+* [Pre-trained models](#pre-trained-models)
+* [FAQ - frequently asked questions](https://github.com/AlexeyAB/darknet/wiki/FAQ---frequently-asked-questions)
+* [Explanations in issues](https://github.com/AlexeyAB/darknet/issues?q=is%3Aopen+is%3Aissue+label%3AExplanations)
+* [Yolo v4 in other frameworks (TensorRT, TensorFlow, PyTorch, OpenVINO, OpenCV-dnn, TVM,...)](#yolo-v4-in-other-frameworks)
+* [Datasets](#datasets)
+
+0. [Improvements in this repository](#improvements-in-this-repository)
+1. [How to use](#how-to-use-on-the-command-line)
+2. How to compile on Linux
+   * [Using cmake](#how-to-compile-on-linux-using-cmake)
+   * [Using make](#how-to-compile-on-linux-using-make)
+3. How to compile on Windows
+   * [Using cmake](#how-to-compile-on-windows-using-cmake)
+   * [Using vcpkg](#how-to-compile-on-windows-using-vcpkg)
+   * [Legacy way](#how-to-compile-on-windows-legacy-way)
+4. [Training and Evaluation of speed and accuracy on MS COCO](https://github.com/AlexeyAB/darknet/wiki#training-and-evaluation-of-speed-and-accuracy-on-ms-coco)
+5. [How to train with multi-GPU:](#how-to-train-with-multi-gpu)
+6. [How to train (to detect your custom objects)](#how-to-train-to-detect-your-custom-objects)
+7. [How to train tiny-yolo (to detect your custom objects)](#how-to-train-tiny-yolo-to-detect-your-custom-objects)
+8. [When should I stop training](#when-should-i-stop-training)
+9. [How to improve object detection](#how-to-improve-object-detection)
+10. [How to mark bounded boxes of objects and create annotation files](#how-to-mark-bounded-boxes-of-objects-and-create-annotation-files)
+11. [How to use Yolo as DLL and SO libraries](#how-to-use-yolo-as-dll-and-so-libraries)
+
+![Darknet Logo](http://pjreddie.com/media/files/darknet-black-small.png) 
+
+![scaled_yolov4](https://user-images.githubusercontent.com/4096485/101356322-f1f5a180-38a8-11eb-9907-4fe4f188d887.png) AP50:95 - FPS (Tesla V100) Paper: https://arxiv.org/abs/2011.08036
+
+----
+
+![modern_gpus](https://user-images.githubusercontent.com/4096485/82835867-f1c62380-9ecd-11ea-9134-1598ed2abc4b.png) AP50:95 / AP50 - FPS (Tesla V100) Paper: https://arxiv.org/abs/2004.10934 
 
 
-Linux中使用./darknet，window下使用darknet.exe.
+tkDNN-TensorRT accelerates YOLOv4 **~2x** times for batch=1 and **3x-4x** times for batch=4.
+* tkDNN: https://github.com/ceccocats/tkDNN
+* OpenCV: https://gist.github.com/YashasSamaga/48bdb167303e10f4d07b754888ddbdcf
 
-Linux中命令格式类似`./darknet detector test ./cfg/coco.data ./cfg/yolov3.cfg ./yolov3.weights`
+#### GeForce RTX 2080 Ti:
+| Network Size 	| Darknet, FPS (avg)| tkDNN TensorRT FP32, FPS  | tkDNN TensorRT FP16, FPS  | OpenCV FP16, FPS | tkDNN TensorRT FP16 batch=4, FPS  | OpenCV FP16 batch=4, FPS | tkDNN Speedup |
+|:-----:|:--------:|--------:|--------:|--------:|--------:|--------:|------:|
+|320	| 100 | 116 | **202** | 183 | 423 | **430** | **4.3x** |
+|416	| 82 | 103 | **162** | 159 | 284 | **294** | **3.6x** |
+|512	| 69 | 91 | 134 | **138** | 206 | **216** | **3.1x** |
+|608 	| 53 | 62 | 103 | **115**| 150 | **150** | **2.8x**  |
+|Tiny 416 | 443 | 609 | **790** | 773 | **1774** | 1353 | **3.5x**  |
+|Tiny 416 CPU Core i7 7700HQ | 3.4 | - | - | 42 | - | 39 | **12x**  |
 
-Linux中的可执行文件在根目录下，Window下则在`\build\darknet\x64`文件夹中。以是不同情况下应该使用的命令：
+* Yolo v4 Full comparison: [map_fps](https://user-images.githubusercontent.com/4096485/80283279-0e303e00-871f-11ea-814c-870967d77fd1.png)
+* Yolo v4 tiny comparison: [tiny_fps](https://user-images.githubusercontent.com/4096485/85734112-6e366700-b705-11ea-95d1-fcba0de76d72.png)
+* CSPNet: [paper](https://arxiv.org/abs/1911.11929) and [map_fps](https://user-images.githubusercontent.com/4096485/71702416-6645dc00-2de0-11ea-8d65-de7d4b604021.png) comparison: https://github.com/WongKinYiu/CrossStagePartialNetworks
+* Yolo v3 on MS COCO: [Speed / Accuracy (mAP@0.5) chart](https://user-images.githubusercontent.com/4096485/52151356-e5d4a380-2683-11e9-9d7d-ac7bc192c477.jpg)
+* Yolo v3 on MS COCO (Yolo v3 vs RetinaNet) - Figure 3: https://arxiv.org/pdf/1804.02767v1.pdf
+* Yolo v2 on Pascal VOC 2007: https://hsto.org/files/a24/21e/068/a2421e0689fb43f08584de9d44c2215f.jpg
+* Yolo v2 on Pascal VOC 2012 (comp4): https://hsto.org/files/3a6/fdf/b53/3a6fdfb533f34cee9b52bdd9bb0b19d9.jpg
 
-- Yolo v3 COCO - **图片测试**: `darknet.exe detector test cfg/coco.data cfg/yolov3.cfg yolov3.weights -thresh 0.25`
-- **输出坐标** of objects: `darknet.exe detector test cfg/coco.data yolov3.cfg yolov3.weights -ext_output dog.jpg`
-- Yolo v3 COCO - **视频测试**: `darknet.exe detector demo cfg/coco.data cfg/yolov3.cfg yolov3.weights -ext_output test.mp4`
-- **网络摄像头**: `darknet.exe detector demo cfg/coco.data cfg/yolov3.cfg yolov3.weights -c 0`
-- **网络视频摄像头** - Smart WebCam: `darknet.exe detector demo cfg/coco.data cfg/yolov3.cfg yolov3.weights http://192.168.0.80:8080/video?dummy=param.mjpg`
-- Yolo v3 - **保存视频结果为res.avi**: `darknet.exe detector demo cfg/coco.data cfg/yolov3.cfg yolov3.weights test.mp4 -out_filename res.avi`
-- Yolo v3 **Tiny版本** COCO - video: `darknet.exe detector demo cfg/coco.data cfg/yolov3-tiny.cfg yolov3-tiny.weights test.mp4`
-- **JSON and MJPEG 服务器** ：创建JSON和MJPEG服务器，允许软件或Web浏览器进行与服务器之间进行多个连接 。假设两者需要的端口为`ip-address:8070` 和 `8090`: `./darknet detector demo ./cfg/coco.data ./cfg/yolov3.cfg ./yolov3.weights test50.mp4 -json_port 8070 -mjpeg_port 8090 -ext_output`
-- Yolo v3 **Tiny** **on GPU**: `darknet.exe detector demo cfg/coco.data cfg/yolov3-tiny.cfg yolov3-tiny.weights -i 1 test.mp4`
-- 另一个可进行图片测试的命令 Yolo v3 COCO - **图片测试**: `darknet.exe detect cfg/yolov3.cfg yolov3.weights -i 0 -thresh 0.25`
-- 在 **Amazon EC2**上训练, 如果想要看mAP和Loss曲线，运行以下命令: `http://ec2-35-160-228-91.us-west-2.compute.amazonaws.com:8090`  (**Darknet 必须使用OpenCV进行编译才能使用该功能**): `./darknet detector train cfg/coco.data yolov3.cfg darknet53.conv.74 -dont_show -mjpeg_port 8090 -map`
-- 186 MB Yolo9000 - **图片分类**: `darknet.exe detector test cfg/combine9k.data cfg/yolo9000.cfg yolo9000.weights`
-- **处理一系列图片，并保存结果为json文件**：`darknet.exe detector test cfg/coco.data cfg/yolov3.cfg yolov3.weights -ext_output -dont_show -out result.json < data/train.txt`
-- **处理一系列图片，并保存结果为txt文件**:
-    `darknet.exe detector test cfg/coco.data cfg/yolov3.cfg yolov3.weights -dont_show -ext_output < data/train.txt > result.txt`
-- **伪标注：** 处理一个list的图片 `data/new_train.txt` ，可以让结果保存为Yolo训练所需的格式，标注文件为 `<image_name>.txt` 。通过这种方法可以迅速增加训练数据量。具体命令为:`darknet.exe detector test cfg/coco.data cfg/yolov3.cfg yolov3.weights -thresh 0.25 -dont_show -save_labels < data/new_train.txt`
-- **如何计算anchor**(通过聚类得到): `darknet.exe detector calc_anchors data/obj.data -num_of_clusters 9 -width 416 -height 416`
-- **计算mAP@IoU=50**: `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights`
-- **计算mAP@IoU=75**: `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights -iou_thresh 0.75`
+#### Youtube video of results
 
-**利用Video-Camera和Mjepg-Stream在Android智能设备中运行YOLOv3**
+| [![Yolo v4](https://user-images.githubusercontent.com/4096485/101360000-1a33cf00-38ae-11eb-9e5e-b29c5fb0afbe.png)](https://youtu.be/1_SiUOYUoOI "Yolo v4") |  [![Scaled Yolo v4](https://user-images.githubusercontent.com/4096485/101359389-43a02b00-38ad-11eb-866c-f813e96bf61a.png)](https://youtu.be/YDFf-TqJOFE "Scaled Yolo v4") |
+|---|---|
 
-1. 下载 mjpeg-stream APP: IP Webcam / Smart WebCam:
-    - Smart WebCam - 从此处下载: `https://play.google.com/store/apps/details?id=com.acontech.android.SmartWebCam2`
-    - IP Webcam下载地址: `https://play.google.com/store/apps/details?id=com.pas.webcam`
-2. 将你的手机与电脑通过WIFI或者USB相连。
-3. 开启手机中的Smart WebCam APP。
-4. 将以下IP地址替换,在Smart WebCam APP中显示，并运行以下命令：
+Others: https://www.youtube.com/user/pjreddie/videos
 
-Yolo v3 COCO-model: `darknet.exe detector demo data/coco.data yolov3.cfg yolov3.weights http://192.168.0.80:8080/video?dummy=param.mjpg -i 0`
+#### How to evaluate AP of YOLOv4 on the MS COCO evaluation server
 
-## 4. Linux下如何编译Darknet
+1. Download and unzip test-dev2017 dataset from MS COCO server: http://images.cocodataset.org/zips/test2017.zip
+2. Download list of images for Detection taks and replace the paths with yours: https://raw.githubusercontent.com/AlexeyAB/darknet/master/scripts/testdev2017.txt
+3. Download `yolov4.weights` file 245 MB: [yolov4.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights) (Google-drive mirror [yolov4.weights](https://drive.google.com/open?id=1cewMfusmPjYWbrnuJRuKhPMwRe_b9PaT) )
+4. Content of the file `cfg/coco.data` should be
 
-### 4.1 使用CMake编译Darknet
-
-CMakeList.txt是一个尝试发现所有安装过的、可选的依赖项(比如CUDA，cuDNN, ZED)的配置文件，然后使用这些依赖项进行编译。它将创建一个共享库文件，这样就可以使用Darknet进行代码开发。
-
-在克隆了项目库以后按照以下命令进行执行：
-
-```shell
-mkdir build-release
-cd build-release
-cmake ..
-make
-make install
+```ini
+classes= 80
+train  = <replace with your path>/trainvalno5k.txt
+valid = <replace with your path>/testdev2017.txt
+names = data/coco.names
+backup = backup
+eval=coco
 ```
 
-### 4.2 使用make编译Darknet
+5. Create `/results/` folder near with `./darknet` executable file
+6. Run validation: `./darknet detector valid cfg/coco.data cfg/yolov4.cfg yolov4.weights`
+7. Rename the file  `/results/coco_results.json` to `detections_test-dev2017_yolov4_results.json` and compress it to `detections_test-dev2017_yolov4_results.zip`
+8. Submit file `detections_test-dev2017_yolov4_results.zip` to the MS COCO evaluation server for the `test-dev2019 (bbox)`
 
-在克隆了项目库以后，直接运行`make`命令，需要注意的是Makefile中有一些可选参数：
+#### How to evaluate FPS of YOLOv4 on GPU
 
-- GPU=1代表编译完成后将可以使用CUDA来进行GPU加速(CUDA应该在`/usr/local/cuda`中)。
-- CUDNN=1代表通过cuDNN v5-v7进行编译，这样将可以加速使用GPU训练过程(cuDNN应该在`/usr/local/cudnn`中)。
-- CUDNN_HALF=1代表在编译的过程中是否添加Tensor Cores, 编译完成后将可以将目标检测速度提升为原来的3倍，训练网络的速度提高为原来的2倍。
-- OPENCV=1代表编译的过程中加入OpenCV, 目前支持的OpenCV的版本有4.x/3.x/2.4.x， 编译结束后将允许Darknet对网络摄像头的视频流或者视频文件进行目标检测。
-- DEBUG=1 代表是否开启YOLO的debug模式。
-- OPENMP=1代表编译过程将引入openmp,编译结束后将代表可以使用多核CPU对yolo进行加速。
-- LIBSO=1 代表编译库darknet.so。
-- ZED_CAMERA=1 构建具有ZED-3D相机支持的库(应安装ZED SDK)，然后运行。
+1. Compile Darknet with `GPU=1 CUDNN=1 CUDNN_HALF=1 OPENCV=1` in the `Makefile`
+2. Download `yolov4.weights` file 245 MB: [yolov4.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights) (Google-drive mirror [yolov4.weights](https://drive.google.com/open?id=1cewMfusmPjYWbrnuJRuKhPMwRe_b9PaT) )
+3. Get any .avi/.mp4 video file (preferably not more than 1920x1080 to avoid bottlenecks in CPU performance)
+4. Run one of two commands and look at the AVG FPS:
 
-## 5. 如何在Window下编译Darknet
+* include video_capturing + NMS + drawing_bboxes: 
+    `./darknet detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights test.mp4 -dont_show -ext_output`
+* exclude video_capturing + NMS + drawing_bboxes: 
+    `./darknet detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights test.mp4 -benchmark`
 
-### 5.1 使用CMake-GUI进行编译
+#### Pre-trained models
 
-建议使用以下方法来完成Window下Darknet的编译，需要环境有：Visual Studio 15/17/19, CUDA>10.0, cuDNN>7.0, OpenCV>2.4
+There are weights-file for different cfg-files (trained for MS COCO dataset):
 
-使用CMake-GUI编译流程：
+FPS on RTX 2070 (R) and Tesla V100 (V):
 
-1. Configure.
-2. Optional platform for generator (Set: x64) .
-3. Finish.
-4. Generate.
-5. Open Project.
-6. Set: x64 & Release.
-7. Build.
-8. Build solution.
+* [yolov4x-mish.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4x-mish.cfg) - 640x640 - **67.9% mAP@0.5 (49.4% AP@0.5:0.95) - 23(R) FPS / 50(V) FPS** - 221 BFlops (110 FMA) - 381 MB: [yolov4x-mish.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4x-mish.weights) 
+   * pre-trained weights for training: https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4x-mish.conv.166
 
-### 5.2 使用vcpkg进行编译
+* [yolov4-csp.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-csp.cfg) - 202 MB: [yolov4-csp.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4-csp.weights) paper [Scaled Yolo v4](https://arxiv.org/abs/2011.08036)
 
-如果你已经满足Visual Studio 15/17/19 、CUDA>10.0、 cuDNN>7.0、OpenCV>2.4的条件, 那么推荐使用通过CMake-GUI的方式进行编译。
+    just change `width=` and `height=` parameters in `yolov4-csp.cfg` file and use the same `yolov4-csp.weights` file for all cases:
+  * `width=640 height=640` in cfg: **66.2% mAP@0.5 (47.5% AP@0.5:0.95) - 70(V) FPS** - 120 (60 FMA) BFlops
+  * `width=512 height=512` in cfg: **64.8% mAP@0.5 (46.2% AP@0.5:0.95) - 93(V) FPS** - 77 (39 FMA) BFlops
+   * pre-trained weights for training: https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4-csp.conv.142
+   
+* [yolov4.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4.cfg) - 245 MB: [yolov4.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights) (Google-drive mirror [yolov4.weights](https://drive.google.com/open?id=1cewMfusmPjYWbrnuJRuKhPMwRe_b9PaT) ) paper [Yolo v4](https://arxiv.org/abs/2004.10934)
+    just change `width=` and `height=` parameters in `yolov4.cfg` file and use the same `yolov4.weights` file for all cases:
+  * `width=608 height=608` in cfg: **65.7% mAP@0.5 (43.5% AP@0.5:0.95) - 34(R) FPS / 62(V) FPS** - 128.5 BFlops
+  * `width=512 height=512` in cfg: **64.9% mAP@0.5 (43.0% AP@0.5:0.95) - 45(R) FPS / 83(V) FPS** - 91.1 BFlops
+  * `width=416 height=416` in cfg: **62.8% mAP@0.5 (41.2% AP@0.5:0.95) - 55(R) FPS / 96(V) FPS** - 60.1 BFlops
+  * `width=320 height=320` in cfg:   **60% mAP@0.5 (  38% AP@0.5:0.95) - 63(R) FPS / 123(V) FPS** - 35.5 BFlops
 
-否则按照以下步骤进行编译:
+* [yolov4-tiny.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny.cfg) - **40.2% mAP@0.5 - 371(1080Ti) FPS / 330(RTX2070) FPS** - 6.9 BFlops - 23.1 MB: [yolov4-tiny.weights](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4-tiny.weights)
 
-- 安装或更新Visual Studio到17+,确保已经对其进行全面修补。
-- 安装CUDA和cuDNN。
-- 安装Git和CMake, 并将它们加入环境变量中。
-- 安装vcpkg然后尝试安装一个测试库来确认安装是正确的，比如：`vcpkg install opengl`。
-- 定义一个环境变量`VCPKG_ROOT`, 指向vcpkg的安装路径。
-- 定义另一个环境变量`VCPKG_DEFAULT_TRIPLET`将其指向x64-windows。
-- 打开Powershell然后运行以下命令：
+* [enet-coco.cfg (EfficientNetB0-Yolov3)](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/enet-coco.cfg) - **45.5% mAP@0.5 - 55(R) FPS** - 3.7 BFlops - 18.3 MB: [enetb0-coco_final.weights](https://drive.google.com/file/d/1FlHeQjWEQVJt0ay1PVsiuuMzmtNyv36m/view)
 
+* [yolov3-openimages.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-openimages.cfg) - 247 MB - 18(R) FPS - OpenImages dataset: [yolov3-openimages.weights](https://pjreddie.com/media/files/yolov3-openimages.weights)
+
+<details><summary><b>CLICK ME</b> - Yolo v3 models</summary>
+
+* [csresnext50-panet-spp-original-optimal.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/csresnext50-panet-spp-original-optimal.cfg) - **65.4% mAP@0.5 (43.2% AP@0.5:0.95) - 32(R) FPS** - 100.5 BFlops - 217 MB: [csresnext50-panet-spp-original-optimal_final.weights](https://drive.google.com/open?id=1_NnfVgj0EDtb_WLNoXV8Mo7WKgwdYZCc)
+
+* [yolov3-spp.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-spp.cfg) - **60.6% mAP@0.5 - 38(R) FPS** - 141.5 BFlops - 240 MB: [yolov3-spp.weights](https://pjreddie.com/media/files/yolov3-spp.weights)
+
+* [csresnext50-panet-spp.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/csresnext50-panet-spp.cfg) - **60.0% mAP@0.5 - 44 FPS** - 71.3 BFlops - 217 MB: [csresnext50-panet-spp_final.weights](https://drive.google.com/file/d/1aNXdM8qVy11nqTcd2oaVB3mf7ckr258-/view?usp=sharing)
+
+* [yolov3.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3.cfg) - **55.3% mAP@0.5 - 66(R) FPS** - 65.9 BFlops - 236 MB: [yolov3.weights](https://pjreddie.com/media/files/yolov3.weights)
+
+* [yolov3-tiny.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-tiny.cfg) - **33.1% mAP@0.5 - 345(R) FPS** - 5.6 BFlops - 33.7 MB: [yolov3-tiny.weights](https://pjreddie.com/media/files/yolov3-tiny.weights)
+
+* [yolov3-tiny-prn.cfg](https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-tiny-prn.cfg) - **33.1% mAP@0.5 - 370(R) FPS** - 3.5 BFlops - 18.8 MB: [yolov3-tiny-prn.weights](https://drive.google.com/file/d/18yYZWyKbo4XSDVyztmsEcF9B_6bxrhUY/view?usp=sharing)
+
+</details>
+
+<details><summary><b>CLICK ME</b> - Yolo v2 models</summary>
+
+* `yolov2.cfg` (194 MB COCO Yolo v2) - requires 4 GB GPU-RAM: https://pjreddie.com/media/files/yolov2.weights
+* `yolo-voc.cfg` (194 MB VOC Yolo v2) - requires 4 GB GPU-RAM: http://pjreddie.com/media/files/yolo-voc.weights
+* `yolov2-tiny.cfg` (43 MB COCO Yolo v2) - requires 1 GB GPU-RAM: https://pjreddie.com/media/files/yolov2-tiny.weights
+* `yolov2-tiny-voc.cfg` (60 MB VOC Yolo v2) - requires 1 GB GPU-RAM: http://pjreddie.com/media/files/yolov2-tiny-voc.weights
+* `yolo9000.cfg` (186 MB Yolo9000-model) - requires 4 GB GPU-RAM: http://pjreddie.com/media/files/yolo9000.weights
+
+</details>
+
+Put it near compiled: darknet.exe
+
+You can get cfg-files by path: `darknet/cfg/`
+
+### Requirements
+
+* Windows or Linux
+* **CMake >= 3.12**: https://cmake.org/download/
+* **CUDA >= 10.0**: https://developer.nvidia.com/cuda-toolkit-archive (on Linux do [Post-installation Actions](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#post-installation-actions))
+* **OpenCV >= 2.4**: use your preferred package manager (brew, apt), build from source using [vcpkg](https://github.com/Microsoft/vcpkg) or download from [OpenCV official site](https://opencv.org/releases.html) (on Windows set system variable `OpenCV_DIR` = `C:\opencv\build` - where are the `include` and `x64` folders [image](https://user-images.githubusercontent.com/4096485/53249516-5130f480-36c9-11e9-8238-a6e82e48c6f2.png))
+* **cuDNN >= 7.0** https://developer.nvidia.com/rdp/cudnn-archive (on **Linux** copy `cudnn.h`,`libcudnn.so`... as desribed here https://docs.nvidia.com/deeplearning/sdk/cudnn-install/index.html#installlinux-tar , on **Windows** copy `cudnn.h`,`cudnn64_7.dll`, `cudnn64_7.lib` as desribed here https://docs.nvidia.com/deeplearning/sdk/cudnn-install/index.html#installwindows )
+* **GPU with CC >= 3.0**: https://en.wikipedia.org/wiki/CUDA#GPUs_supported
+* on Linux **GCC or Clang**, on Windows **MSVC 2017/2019** https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=Community
+
+### Yolo v4 in other frameworks
+
+* **Pytorch - Scaled-YOLOv4:** https://github.com/WongKinYiu/ScaledYOLOv4
+* **TensorFlow:** `pip install yolov4` YOLOv4 on TensorFlow 2.0 / TFlite / Andriod: https://github.com/hunglc007/tensorflow-yolov4-tflite
+    Official TF models: https://github.com/tensorflow/models/tree/master/official/vision/beta/projects/yolo
+    For YOLOv4 - convert `yolov4.weights`/`cfg` files to `yolov4.pb` by using [TNTWEN](https://github.com/TNTWEN/OpenVINO-YOLOV4) project, and to `yolov4.tflite` [TensorFlow-lite](https://www.tensorflow.org/lite/guide/get_started#2_convert_the_model_format)
+* **OpenCV-dnn** the fastest implementation of YOLOv4 for CPU (x86/ARM-Android), OpenCV can be compiled with [OpenVINO-backend](https://github.com/opencv/opencv/wiki/Intel's-Deep-Learning-Inference-Engine-backend) for running on (Myriad X / USB Neural Compute Stick / Arria FPGA), use `yolov4.weights`/`cfg` with: [C++ example](https://github.com/opencv/opencv/blob/8c25a8eb7b10fb50cda323ee6bec68aa1a9ce43c/samples/dnn/object_detection.cpp#L192-L221) or [Python example](https://github.com/opencv/opencv/blob/8c25a8eb7b10fb50cda323ee6bec68aa1a9ce43c/samples/dnn/object_detection.py#L129-L150)
+* **Intel OpenVINO 2021.2:** supports YOLOv4 (NPU Myriad X / USB Neural Compute Stick / Arria FPGA): https://devmesh.intel.com/projects/openvino-yolov4-49c756 read this [manual](https://github.com/TNTWEN/OpenVINO-YOLOV4) (old [manual](https://software.intel.com/en-us/articles/OpenVINO-Using-TensorFlow#converting-a-darknet-yolo-model) )
+* **Tencent/ncnn:** the fastest inference of YOLOv4 on mobile phone CPU: https://github.com/Tencent/ncnn
+* **PyTorch > ONNX**: 
+    * [WongKinYiu/PyTorch_YOLOv4](https://github.com/WongKinYiu/PyTorch_YOLOv4)
+    * [maudzung/3D-YOLOv4](https://github.com/maudzung/Complex-YOLOv4-Pytorch)
+    * [Tianxiaomo/pytorch-YOLOv4](https://github.com/Tianxiaomo/pytorch-YOLOv4)
+    * [YOLOv5](https://github.com/ultralytics/yolov5)
+* **ONNX** on Jetson for YOLOv4: https://developer.nvidia.com/blog/announcing-onnx-runtime-for-jetson/
+* **TensorRT** YOLOv4 on TensorRT+tkDNN: https://github.com/ceccocats/tkDNN
+    For YOLOv3 (-70% faster inference): [Yolo is natively supported in DeepStream 4.0](https://news.developer.nvidia.com/deepstream-sdk-4-now-available/) read [PDF](https://docs.nvidia.com/metropolis/deepstream/Custom_YOLO_Model_in_the_DeepStream_YOLO_App.pdf). [jkjung-avt/tensorrt_demos](https://github.com/jkjung-avt/tensorrt_demos) or [wang-xinyu/tensorrtx](https://github.com/wang-xinyu/tensorrtx) implemented yolov3-spp, yolov4, etc.
+* **Deepstream 5.0 / TensorRT for YOLOv4** https://github.com/NVIDIA-AI-IOT/yolov4_deepstream or https://github.com/marcoslucianops/DeepStream-Yolo
+* **Triton Inference Server / TensorRT** https://github.com/isarsoft/yolov4-triton-tensorrt
+* **Xilinx Zynq Ultrascale+ Deep Learning Processor (DPU) ZCU102/ZCU104:** https://github.com/Xilinx/Vitis-In-Depth-Tutorial/tree/master/Machine_Learning/Design_Tutorials/07-yolov4-tutorial
+* **Amazon Neurochip / Amazon EC2 Inf1 instances** 1.85 times higher throughput and 37% lower cost per image for TensorFlow based YOLOv4 model, using Keras [URL](https://aws.amazon.com/ru/blogs/machine-learning/improving-performance-for-deep-learning-based-object-detection-with-an-aws-neuron-compiled-yolov4-model-on-aws-inferentia/)
+* **TVM** - compilation of deep learning models (Keras, MXNet, PyTorch, Tensorflow, CoreML, DarkNet) into minimum deployable modules on diverse hardware backends (CPUs, GPUs, FPGA, and specialized accelerators): https://tvm.ai/about
+* **OpenDataCam** - It detects, tracks and counts moving objects by using YOLOv4: https://github.com/opendatacam/opendatacam#-hardware-pre-requisite
+* **Netron** - Visualizer for neural networks: https://github.com/lutzroeder/netron
+
+#### Datasets
+
+* MS COCO: use `./scripts/get_coco_dataset.sh` to get labeled MS COCO detection dataset
+* OpenImages: use `python ./scripts/get_openimages_dataset.py` for labeling train detection dataset
+* Pascal VOC: use `python ./scripts/voc_label.py` for labeling Train/Test/Val detection datasets
+* ILSVRC2012 (ImageNet classification): use `./scripts/get_imagenet_train.sh` (also `imagenet_label.sh` for labeling valid set)
+* German/Belgium/Russian/LISA/MASTIF Traffic Sign Datasets for Detection - use this parsers: https://github.com/angeligareta/Datasets2Darknet#detection-task
+* List of other datasets: https://github.com/AlexeyAB/darknet/tree/master/scripts#datasets
+
+### Improvements in this repository
+
+* developed State-of-the-Art object detector YOLOv4
+* added State-of-Art models: CSP, PRN, EfficientNet
+* added layers: [conv_lstm], [scale_channels] SE/ASFF/BiFPN, [local_avgpool], [sam], [Gaussian_yolo], [reorg3d] (fixed [reorg]), fixed [batchnorm]
+* added the ability for training recurrent models (with layers conv-lstm`[conv_lstm]`/conv-rnn`[crnn]`) for accurate detection on video
+* added data augmentation: `[net] mixup=1 cutmix=1 mosaic=1 blur=1`. Added activations: SWISH, MISH, NORM_CHAN, NORM_CHAN_SOFTMAX
+* added the ability for training with GPU-processing using CPU-RAM to increase the mini_batch_size and increase accuracy (instead of batch-norm sync)
+* improved binary neural network performance **2x-4x times** for Detection on CPU and GPU if you trained your own weights by using this XNOR-net model (bit-1 inference) : https://github.com/AlexeyAB/darknet/blob/master/cfg/yolov3-tiny_xnor.cfg
+* improved neural network performance **~7%** by fusing 2 layers into 1: Convolutional + Batch-norm
+* improved performance: Detection **2x times**, on GPU Volta/Turing (Tesla V100, GeForce RTX, ...) using Tensor Cores if `CUDNN_HALF` defined in the `Makefile` or `darknet.sln`
+* improved performance **~1.2x** times on FullHD, **~2x** times on 4K, for detection on the video (file/stream) using `darknet detector demo`... 
+* improved performance **3.5 X times** of data augmentation for training (using OpenCV SSE/AVX functions instead of hand-written functions) - removes bottleneck for training on multi-GPU or GPU Volta
+* improved performance of detection and training on Intel CPU with AVX (Yolo v3 **~85%**)
+* optimized memory allocation during network resizing when `random=1`
+* optimized GPU initialization for detection - we use batch=1 initially instead of re-init with batch=1
+* added correct calculation of **mAP, F1, IoU, Precision-Recall** using command `darknet detector map`...
+* added drawing of chart of average-Loss and accuracy-mAP (`-map` flag) during training
+* run `./darknet detector demo ... -json_port 8070 -mjpeg_port 8090` as JSON and MJPEG server to get results online over the network by using your soft or Web-browser
+* added calculation of anchors for training
+* added example of Detection and Tracking objects: https://github.com/AlexeyAB/darknet/blob/master/src/yolo_console_dll.cpp
+* run-time tips and warnings if you use incorrect cfg-file or dataset
+* added support for Windows
+* many other fixes of code...
+
+And added manual - [How to train Yolo v4-v2 (to detect your custom objects)](#how-to-train-to-detect-your-custom-objects)
+
+Also, you might be interested in using a simplified repository where is implemented INT8-quantization (+30% speedup and -1% mAP reduced): https://github.com/AlexeyAB/yolo2_light
+
+#### How to use on the command line
+
+On Linux use `./darknet` instead of `darknet.exe`, like this:`./darknet detector test ./cfg/coco.data ./cfg/yolov4.cfg ./yolov4.weights`
+
+On Linux find executable file `./darknet` in the root directory, while on Windows find it in the directory `\build\darknet\x64` 
+
+* Yolo v4 COCO - **image**: `darknet.exe detector test cfg/coco.data cfg/yolov4.cfg yolov4.weights -thresh 0.25`
+* **Output coordinates** of objects: `darknet.exe detector test cfg/coco.data yolov4.cfg yolov4.weights -ext_output dog.jpg`
+* Yolo v4 COCO - **video**: `darknet.exe detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights -ext_output test.mp4`
+* Yolo v4 COCO - **WebCam 0**: `darknet.exe detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights -c 0`
+* Yolo v4 COCO for **net-videocam** - Smart WebCam: `darknet.exe detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights http://192.168.0.80:8080/video?dummy=param.mjpg`
+* Yolo v4 - **save result videofile res.avi**: `darknet.exe detector demo cfg/coco.data cfg/yolov4.cfg yolov4.weights test.mp4 -out_filename res.avi`
+* Yolo v3 **Tiny** COCO - video: `darknet.exe detector demo cfg/coco.data cfg/yolov3-tiny.cfg yolov3-tiny.weights test.mp4`
+* **JSON and MJPEG server** that allows multiple connections from your soft or Web-browser `ip-address:8070` and 8090: `./darknet detector demo ./cfg/coco.data ./cfg/yolov3.cfg ./yolov3.weights test50.mp4 -json_port 8070 -mjpeg_port 8090 -ext_output`
+* Yolo v3 Tiny **on GPU #1**: `darknet.exe detector demo cfg/coco.data cfg/yolov3-tiny.cfg yolov3-tiny.weights -i 1 test.mp4`
+* Alternative method Yolo v3 COCO - image: `darknet.exe detect cfg/yolov4.cfg yolov4.weights -i 0 -thresh 0.25`
+* Train on **Amazon EC2**, to see mAP & Loss-chart using URL like: `http://ec2-35-160-228-91.us-west-2.compute.amazonaws.com:8090` in the Chrome/Firefox (**Darknet should be compiled with OpenCV**): 
+    `./darknet detector train cfg/coco.data yolov4.cfg yolov4.conv.137 -dont_show -mjpeg_port 8090 -map`
+* 186 MB Yolo9000 - image: `darknet.exe detector test cfg/combine9k.data cfg/yolo9000.cfg yolo9000.weights`
+* Remeber to put data/9k.tree and data/coco9k.map under the same folder of your app if you use the cpp api to build an app
+* To process a list of images `data/train.txt` and save results of detection to `result.json` file use: 
+    `darknet.exe detector test cfg/coco.data cfg/yolov4.cfg yolov4.weights -ext_output -dont_show -out result.json < data/train.txt`
+* To process a list of images `data/train.txt` and save results of detection to `result.txt` use:                             
+    `darknet.exe detector test cfg/coco.data cfg/yolov4.cfg yolov4.weights -dont_show -ext_output < data/train.txt > result.txt`
+* Pseudo-lableing - to process a list of images `data/new_train.txt` and save results of detection in Yolo training format for each image as label `<image_name>.txt` (in this way you can increase the amount of training data) use:
+    `darknet.exe detector test cfg/coco.data cfg/yolov4.cfg yolov4.weights -thresh 0.25 -dont_show -save_labels < data/new_train.txt`
+* To calculate anchors: `darknet.exe detector calc_anchors data/obj.data -num_of_clusters 9 -width 416 -height 416`
+* To check accuracy mAP@IoU=50: `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights`
+* To check accuracy mAP@IoU=75: `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights -iou_thresh 0.75`
+
+##### For using network video-camera mjpeg-stream with any Android smartphone
+
+1. Download for Android phone mjpeg-stream soft: IP Webcam / Smart WebCam
+
+    * Smart WebCam - preferably: https://play.google.com/store/apps/details?id=com.acontech.android.SmartWebCam2
+    * IP Webcam: https://play.google.com/store/apps/details?id=com.pas.webcam
+
+2. Connect your Android phone to computer by WiFi (through a WiFi-router) or USB
+3. Start Smart WebCam on your phone
+4. Replace the address below, on shown in the phone application (Smart WebCam) and launch:
+
+* Yolo v4 COCO-model: `darknet.exe detector demo data/coco.data yolov4.cfg yolov4.weights http://192.168.0.80:8080/video?dummy=param.mjpg -i 0`
+
+### How to compile on Linux/macOS (using `CMake`)
+
+The `CMakeLists.txt` will attempt to find installed optional dependencies like CUDA, cudnn, ZED and build against those. It will also create a shared object library file to use `darknet` for code development.
+
+Open a shell terminal inside the cloned repository and launch:
+
+```bash
+./build.sh
 ```
-PS \>                  cd $env:VCPKG_ROOT
-PS Code\vcpkg>         .\vcpkg install pthreads opencv[ffmpeg] 
-#replace with opencv[cuda,ffmpeg] in case you want to use cuda-accelerated openCV
+
+### How to compile on Linux (using `make`)
+
+Just do `make` in the darknet directory. (You can try to compile and run it on Google Colab in cloud [link](https://colab.research.google.com/drive/12QusaaRj_lUwCGDvQNfICpa7kA7_a2dE) (press «Open in Playground» button at the top-left corner) and watch the video [link](https://www.youtube.com/watch?v=mKAEGSxwOAY) )
+Before make, you can set such options in the `Makefile`: [link](https://github.com/AlexeyAB/darknet/blob/9c1b9a2cf6363546c152251be578a21f3c3caec6/Makefile#L1)
+
+* `GPU=1` to build with CUDA to accelerate by using GPU (CUDA should be in `/usr/local/cuda`)
+* `CUDNN=1` to build with cuDNN v5-v7 to accelerate training by using GPU (cuDNN should be in `/usr/local/cudnn`)
+* `CUDNN_HALF=1` to build for Tensor Cores (on Titan V / Tesla V100 / DGX-2 and later) speedup Detection 3x, Training 2x
+* `OPENCV=1` to build with OpenCV 4.x/3.x/2.4.x - allows to detect on video files and video streams from network cameras or web-cams
+* `DEBUG=1` to bould debug version of Yolo
+* `OPENMP=1` to build with OpenMP support to accelerate Yolo by using multi-core CPU
+* `LIBSO=1` to build a library `darknet.so` and binary runable file `uselib` that uses this library. Or you can try to run so `LD_LIBRARY_PATH=./:$LD_LIBRARY_PATH ./uselib test.mp4` How to use this SO-library from your own code - you can look at C++ example: https://github.com/AlexeyAB/darknet/blob/master/src/yolo_console_dll.cpp
+    or use in such a way: `LD_LIBRARY_PATH=./:$LD_LIBRARY_PATH ./uselib data/coco.names cfg/yolov4.cfg yolov4.weights test.mp4`
+* `ZED_CAMERA=1` to build a library with ZED-3D-camera support (should be ZED SDK installed), then run
+    `LD_LIBRARY_PATH=./:$LD_LIBRARY_PATH ./uselib data/coco.names cfg/yolov4.cfg yolov4.weights zed_camera`
+* You also need to specify for which graphics card the code is generated. This is done by setting `ARCH=`. If you use a never version than CUDA 11 you further need to edit line 20 from Makefile and remove `-gencode arch=compute_30,code=sm_30 \` as Kepler GPU support was dropped in CUDA 11. You can also drop the general `ARCH=` and just uncomment `ARCH=` for your graphics card.
+
+To run Darknet on Linux use examples from this article, just use `./darknet` instead of `darknet.exe`, i.e. use this command: `./darknet detector test ./cfg/coco.data ./cfg/yolov4.cfg ./yolov4.weights`
+
+### How to compile on Windows (using `CMake`)
+
+Requires: 
+* MSVS: https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=Community
+* Cmake GUI: `Windows win64-x64 Installer`https://cmake.org/download/
+* Download Darknet zip-archive with the latest commit and uncompress it: [master.zip](https://github.com/AlexeyAB/darknet/archive/master.zip)
+
+In the Windows: 
+
+
+* Start (button) -> All programms -> Cmake -> Cmake (gui) -> 
+
+* [look at image](https://habrastorage.org/webt/pz/s1/uu/pzs1uu4heb7vflfcjqn-lxy-aqu.jpeg) In Cmake: Enter input path to the darknet Source, and output path to the Binaries -> Configure (button) -> Optional platform for generator: `x64`  -> Finish -> Generate -> Open Project -> 
+
+* in MS Visual Studio: Select: x64 and Release -> Build -> Build solution
+
+* find the executable file `darknet.exe` in the output path to the binaries you specified
+
+![x64 and Release](https://habrastorage.org/webt/ay/ty/f-/aytyf-8bufe7q-16yoecommlwys.jpeg)
+
+
+
+### How to compile on Windows (using `vcpkg`)
+
+This is the recommended approach to build Darknet on Windows.
+
+1. Install Visual Studio 2017 or 2019. In case you need to download it, please go here: [Visual Studio Community](http://visualstudio.com)
+
+2. Install CUDA (at least v10.0) enabling VS Integration during installation.
+
+3. Open Powershell (Start -> All programs -> Windows Powershell) and type these commands:
+
+```PowerShell
+PS Code\>              git clone https://github.com/microsoft/vcpkg
+PS Code\>              cd vcpkg
+PS Code\vcpkg>         $env:VCPKG_ROOT=$PWD
+PS Code\vcpkg>         .\bootstrap-vcpkg.bat
+PS Code\vcpkg>         .\vcpkg install darknet[full]:x64-windows #replace with darknet[opencv-base,cuda,cudnn]:x64-windows for a quicker install of dependencies
+PS Code\vcpkg>         cd ..
+PS Code\>              git clone https://github.com/AlexeyAB/darknet
+PS Code\>              cd darknet
+PS Code\darknet>       powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-- 打开Powershell, 切换到darknet文件夹，然后运行`.\build.ps1`进行编译。如果要使用Visual Studio，将在Build后找到CMake为您创建的两个自定义解决方案，一个在`build_win_debug`中，另一个在`build_win_release`中，其中包含适用于系统的所有配置标志。
+## How to train with multi-GPU
 
-### 5.3 使用legacy way进行编译
+1. Train it first on 1 GPU for like 1000 iterations: `darknet.exe detector train cfg/coco.data cfg/yolov4.cfg yolov4.conv.137`
 
-- 如果你有CUDA10.0、cuDNN 7.4 和OpenCV 3.x , 那么打开`build\darknet\darknet.sln`, 设置x64和Release 然后运行Build， 进行darknet的编译，将cuDNN加入环境变量中。
+2. Then stop and by using partially-trained model `/backup/yolov4_1000.weights` run training with multigpu (up to 4 GPUs): `darknet.exe detector train cfg/coco.data cfg/yolov4.cfg /backup/yolov4_1000.weights -gpus 0,1,2,3`
 
-    - 在`C:\opencv_3.0\opencv\build\x64\vc14\bin`找到`opencv_world320.dll`和`opencv_ffmpeg320_64.dll`, 然后将其复制到`darknet.exe`同级目录中。
-    - 在`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.0`中检查是否含有bin和include文件夹。如果没有这两个文件夹，那就将他们从CUDA安装的地方复制到这个地方。
-    - 安装cuDNN 7.4.1 来匹配CUDA 10.0, 将cuDNN添加到环境变量`CUDNN`。将`cudnn64_7.dll`复制到`\build\darknet\x64`中。
+If you get a Nan, then for some datasets better to decrease learning rate, for 4 GPUs set `learning_rate = 0,00065` (i.e. learning_rate = 0.00261 / GPUs). In this case also increase 4x times `burn_in =` in your cfg-file. I.e. use `burn_in = 4000` instead of `1000`.
 
-- 如果你是用的是其他版本的CUDA（不是CUDA 10.0）, 那么使用Notepad打开`build\darknet\darknet.vxcproj`, 将其中的CUDA 10.0替换为你的CUDA的版本。然后打开`\darknet.sln`, 然后右击工程，点击属性properties, 选择CUDA C/C++, 然后选择Device , 然后移除`compute_75,sm_75`。之后从第一步从头开始执行。
+https://groups.google.com/d/msg/darknet/NbJqonJBTSY/Te5PfIpuCAAJ
 
-- 如果你没有GPU但是有OpenCV3.0， 那么打开`build\darknet\darknet_no_gpu.sln`, 设置x64和Release， 然后运行build -> build darknet_no_gpu。
+## How to train (to detect your custom objects)
 
-- 如果你只安装了OpenCV 2.4.14，那你应该修改`\darknet.sln`中的路径。
+(to train old Yolo v2 `yolov2-voc.cfg`, `yolov2-tiny-voc.cfg`, `yolo-voc.cfg`, `yolo-voc.2.0.cfg`, ... [click by the link](https://github.com/AlexeyAB/darknet/tree/47c7af1cea5bbdedf1184963355e6418cb8b1b4f#how-to-train-pascal-voc-data))
 
-    - (右键点击工程) -> properties -> C/C++ -> General -> Additional Include Directories: `C:\opencv_2.4.13\opencv\build\include`
-    - (右键点击工程)-> properties -> Linker -> General -> Additional Library Directories: `C:\opencv_2.4.13\opencv\build\x64\vc14\lib`
+Training Yolo v4 (and v3):
 
-- 如果你的GPU有Tensor Cores(Nvidia Titan V/ Tesla V100/ DGX-2等型号)， 可以提升目标检测模型测试速度为原来的3倍，训练速度变为原来的2倍。`\darknet.sln` -> (右键点击工程) -> properties -> C/C++ -> Preprocessor -> Preprocessor Definitions, and add here: `CUDNN_HALF;`
+0. For training `cfg/yolov4-custom.cfg` download the pre-trained weights-file (162 MB): [yolov4.conv.137](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.conv.137) (Google drive mirror [yolov4.conv.137](https://drive.google.com/open?id=1JKF-bdIklxOOVy-2Cr5qdvjgGpmGfcbp) )
 
-    **注意**：CUDA 必须在Visual Studio安装后再安装。
+1. Create file `yolo-obj.cfg` with the same content as in `yolov4-custom.cfg` (or copy `yolov4-custom.cfg` to `yolo-obj.cfg)` and:
 
-## 6. 如何训练
+* change line batch to [`batch=64`](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L3)
+* change line subdivisions to [`subdivisions=16`](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L4)
+* change line max_batches to (`classes*2000` but not less than number of training images, but not less than number of training images and not less than `6000`), f.e. [`max_batches=6000`](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L20) if you train for 3 classes
+* change line steps to 80% and 90% of max_batches, f.e. [`steps=4800,5400`](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L22)
+* set network size `width=416 height=416` or any value multiple of 32: https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L8-L9
+* change line `classes=80` to your number of objects in each of 3 `[yolo]`-layers:
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L610
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L696
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L783
+* change [`filters=255`] to filters=(classes + 5)x3 in the 3 `[convolutional]` before each `[yolo]` layer, keep in mind that it only has to be the last `[convolutional]` before each of the `[yolo]` layers.
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L603
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L689
+  * https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L776
+* when using [`[Gaussian_yolo]`](https://github.com/AlexeyAB/darknet/blob/6e5bdf1282ad6b06ed0e962c3f5be67cf63d96dc/cfg/Gaussian_yolov3_BDD.cfg#L608)  layers, change [`filters=57`] filters=(classes + 9)x3 in the 3 `[convolutional]` before each `[Gaussian_yolo]` layer
+  * https://github.com/AlexeyAB/darknet/blob/6e5bdf1282ad6b06ed0e962c3f5be67cf63d96dc/cfg/Gaussian_yolov3_BDD.cfg#L604
+  * https://github.com/AlexeyAB/darknet/blob/6e5bdf1282ad6b06ed0e962c3f5be67cf63d96dc/cfg/Gaussian_yolov3_BDD.cfg#L696
+  * https://github.com/AlexeyAB/darknet/blob/6e5bdf1282ad6b06ed0e962c3f5be67cf63d96dc/cfg/Gaussian_yolov3_BDD.cfg#L789
 
-### 6.1 Pascal VOC dataset
+So if `classes=1` then should be `filters=18`. If `classes=2` then write `filters=21`.
+  
+**(Do not write in the cfg-file: filters=(classes + 5)x3)**
+  
+(Generally `filters` depends on the `classes`, `coords` and number of `mask`s, i.e. filters=`(classes + coords + 1)*<number of mask>`, where `mask` is indices of anchors. If `mask` is absence, then filters=`(classes + coords + 1)*num`)
 
-1. 下载预训练模型 (154 MB): `http://pjreddie.com/media/files/darknet53.conv.74` 将其放在 `build\darknet\x64`文件夹中。
+So for example, for 2 objects, your file `yolo-obj.cfg` should differ from `yolov4-custom.cfg` in such lines in each of **3** [yolo]-layers:
 
-2. 下载pascal voc数据集并解压到 `build\darknet\x64\data\voc` 放在 `build\darknet\x64\data\voc\VOCdevkit\`文件夹中:
+```ini
+[convolutional]
+filters=21
 
-    - `http://pjreddie.com/media/files/VOCtrainval_11-May-2012.tar`。
-    - `http://pjreddie.com/media/files/VOCtrainval_06-Nov-2007.tar`。
-    - `http://pjreddie.com/media/files/VOCtest_06-Nov-2007.tar`。
-
-    2.1 下载 `voc_label.py` 到 `build\darknet\x64\data\voc`，地址为: `http://pjreddie.com/media/files/voc_label.py。`
-
-3. 下载并安装python: `https://www.python.org/ftp/python/3.5.2/python-3.5.2-amd64.exe`
-
-4. 运行命令: `python build\darknet\x64\data\voc\voc_label.py` (来生成文件: 2007_test.txt, 2007_train.txt, 2007_val.txt, 2012_train.txt, 2012_val.txt)。
-
-5. 运行命令: `type 2007_train.txt 2007_val.txt 2012_*.txt > train.txt`。
-
-6. 在 `yolov3-voc.cfg`文件中设置 `batch=64` 和`subdivisions=8`。
-
-7. 使用 `train_voc.cmd` 或者使用以下命令开始训练:
-
-    `darknet.exe detector train cfg/voc.data cfg/yolov3-voc.cfg darknet53.conv.74`。
-
-(**Note:** 如果想要停止loss显示，添加 `-dont_show`标志. 如果使用CPU运行, 用`darknet_no_gpu.exe` 代替 `darknet.exe`。)
-
-如果想要改数据集路径的话，请修改 `build\darknet\cfg\voc.data`文件。
-
-**Note:** 在训练中如果你看到avg为nan，那证明训练出错。但是如果在其他部分出现nan，这属于正常现象，训练过程是正常的。
-
-### 6.2 如何使用多GPU训练？
-
-1. 首先在一个GPU中训练大概1000个轮次: `darknet.exe detector train cfg/voc.data cfg/yolov3-voc.cfg darknet53.conv.74`。
-2. 然后停下来基于这个保存的模型 `/backup/yolov3-voc_1000.weights` 使用多GPU (最多4个GPU): `darknet.exe detector train cfg/voc.data cfg/yolov3-voc.cfg /backup/yolov3-voc_1000.weights -gpus 0,1,2,3`。
-
-在多GPU训练的时候，`learning rate`需要进行修改，比如单`gpu使用0.001`，那么多gpu应该使用0.001/GPUS。然后`cfg`文件中的`burn_in`参数和`max_batches`参数要设置为原来的GPUS倍。
-
-### 6.3 训练自定义数据集(重点关注)
-
-训练较早提出的Yolo 系列算法如`yolov2-voc.cfg`, `yolov2-tiny-voc.cfg`, `yolo-voc.cfg`, `yolo-voc.2.0.cfg`，请看`https://github.com/AlexeyAB/darknet/tree/47c7af1cea5bbdedf1184963355e6418cb8b1b4f#how-to-train-pascal-voc-data`。
-
-Training Yolo v3:
-
-1. 创建与 `yolov3.cfg`内容相同的 `yolo-obj.cfg` 或者直接复制然后重命名为`yolo-obj.cfg` 然后
-
-- 设置`cfg`文件中 `batch=64`。
-
-- 设置`cfg`文件中 `subdivisions=16`。
-
-- 设置`cfg`文件中`max_batches`参数 (一般可以设置为`classes*2000` 但是不要低于 `4000`), 比如 如果你有三个类，那么设置`max_batches=6000`。 
-
-- 设置`steps`参数，一般为80%和90%的`max_batches`。比如 `steps=4800,5400`
-
-- 设置网络输入长宽必须能够整除32，比如 `width=416 height=416` `
-
-- 修改yolo层中的 `classes=80` 改为你的类别的个数，比如`classes=3`:
-
-- 修改yolo层前一个卷积层convolutional输出通道数。修改的`filter`个数有一定要求，按照公式`filters=(classes+5)×3`来设置。这里的`5`代表`x, y, w, h, conf`, 这里的`3`代表分配`3`个anchor。
-
-- 如果使用 `[Gaussian_yolo]` (Gaussian_yolov3_BDD.cfg)，`filters`计算方式不太一样，按照 `filters=(classes + 9)x3`进行计算。
-
-- 通常来讲，filters的个数计算依赖于类别个数，坐标以及`mask`的个数（`cfg`中的`mask`参数也就是`anchors`的个数）。
-
-    举个例子,对于两个目标,你的 `yolo-obj.cfg` 和`yolov3.cfg` 不同的地方应该在每个` [yolo]/[region]`层的下面几行:
-
-```
-  [convolutional]
-  filters=21
-
-  [region]
-  classes=2
+[region]
+classes=2
 ```
 
-2. 在`build\darknet\x64\data\`创建文件 `obj.names` , 每行一个类别的名称。
-3. 在`build\darknet\x64\data\` 创建`obj.data`, 具体内容如下:
+2. Create file `obj.names` in the directory `build\darknet\x64\data\`, with objects names - each in new line
 
-```
-  classes= 2 # 你的类别的个数
-  train  = data/train.txt # 存储用于训练的图片位置
-  valid  = data/test.txt # 存储用于测试的图片的位置
-  names = data/obj.names # 每行一个类别的名称
+3. Create file `obj.data` in the directory `build\darknet\x64\data\`, containing (where **classes = number of objects**):
+
+  ```ini
+  classes = 2
+  train  = data/train.txt
+  valid  = data/test.txt
+  names = data/obj.names
   backup = backup/
-```
+  ```
 
-4. 将你的图片放在 `build\darknet\x64\data\obj\`文件夹下。
-5. 你应该标注你的数据集中的每一张图片，使用`Yolo_mark`这个可视化GUI软件来标注出目标框并且产生标注文件。地址： `https://github.com/AlexeyAB/Yolo_mark`。
+4. Put image-files (.jpg) of your objects in the directory `build\darknet\x64\data\obj\`
 
-软件将会为每一个图像创建一个`txt`文件，并将其放在同一个文件夹中，命名与原图片的名称相同，唯一不同的就是后缀是txt。txt标注文件中每一个目标独占一行，按照`<object-class> <x_center> <y_center> <width> <height>`的格式排布。
+5. You should label each object on images from your dataset. Use this visual GUI-software for marking bounded boxes of objects and generating annotation files for Yolo v2 & v3: https://github.com/AlexeyAB/Yolo_mark
 
-具体参数解释：
+It will create `.txt`-file for each `.jpg`-image-file - in the same directory and with the same name, but with `.txt`-extension, and put to file: object number and object coordinates on this image, for each object in new line: 
 
-- `<object-class>` -是从 `0` 到 `(classes-1)`的整数，代表具体的类别。
+`<object-class> <x_center> <y_center> <width> <height>`
 
-- `<x_center> <y_center> <width> <height>` -  是归一化到`(0.0 to 1.0]`之间的浮点数，都是相对于图片整体的宽和高的一个相对值。
+  Where: 
+  * `<object-class>` - integer object number from `0` to `(classes-1)`
+  * `<x_center> <y_center> <width> <height>` - float values **relative** to width and height of image, it can be equal from `(0.0 to 1.0]`
+  * for example: `<x> = <absolute_x> / <image_width>` or `<height> = <absolute_height> / <image_height>`
+  * atention: `<x_center> <y_center>` - are center of rectangle (are not top-left corner)
 
-- 比如: `<x> = <absolute_x> / <image_width>` 或者 `<height> = <absolute_height> / <image_height>`
+  For example for `img1.jpg` you will be created `img1.txt` containing:
 
-- 需要注意的是: `<x_center> <y_center>` - 是标注框的中心点，而不是左上角。请注意格式。
-
-    举个例子，img1.txt中内容如下，代表有两个类别的三个目标：
-
-```
+  ```
   1 0.716797 0.395833 0.216406 0.147222
   0 0.687109 0.379167 0.255469 0.158333
   1 0.420312 0.395833 0.140625 0.166667
-```
+  ```
 
-6. 在`build\darknet\x64\data\`文件夹中创建train.txt文件，每行包含的是训练集图片的内容。其路径是相对于 `darknet.exe`的路径或者绝对路径：
+6. Create file `train.txt` in directory `build\darknet\x64\data\`, with filenames of your images, each filename in new line, with path relative to `darknet.exe`, for example containing:
 
-```
+  ```
   data/obj/img1.jpg
   data/obj/img2.jpg
   data/obj/img3.jpg
-```
+  ```
 
-7. 下载预训练权重，并将其放在 `build\darknet\x64`文件夹中。
+7. Download pre-trained weights for the convolutional layers and put to the directory `build\darknet\x64`
+    * for `yolov4.cfg`, `yolov4-custom.cfg` (162 MB): [yolov4.conv.137](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.conv.137) (Google drive mirror [yolov4.conv.137](https://drive.google.com/open?id=1JKF-bdIklxOOVy-2Cr5qdvjgGpmGfcbp) )
+    * for `yolov4-tiny.cfg`, `yolov4-tiny-3l.cfg`, `yolov4-tiny-custom.cfg` (19 MB): [yolov4-tiny.conv.29](https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4-tiny.conv.29)  
+    * for `csresnext50-panet-spp.cfg` (133 MB): [csresnext50-panet-spp.conv.112](https://drive.google.com/file/d/16yMYCLQTY_oDlCIZPfn_sab6KD3zgzGq/view?usp=sharing)
+    * for `yolov3.cfg, yolov3-spp.cfg` (154 MB): [darknet53.conv.74](https://pjreddie.com/media/files/darknet53.conv.74)
+    * for `yolov3-tiny-prn.cfg , yolov3-tiny.cfg` (6 MB): [yolov3-tiny.conv.11](https://drive.google.com/file/d/18v36esoXCh-PsOKwyP2GWrpYDptDY8Zf/view?usp=sharing)
+    * for `enet-coco.cfg (EfficientNetB0-Yolov3)` (14 MB): [enetb0-coco.conv.132](https://drive.google.com/file/d/1uhh3D6RSn0ekgmsaTcl-ZW53WBaUDo6j/view?usp=sharing)
+    
 
-    - 对于`csresnext50-panet-spp.cfg` (133 MB)：请查看原工程。
-    - 对于`yolov3.cfg, yolov3-spp.cfg` (154 MB)：请查看原工程。
-    - 对于`yolov3-tiny-prn.cfg , yolov3-tiny.cfg` (6 MB)：请查看原工程。
-    - 对于`enet-coco.cfg (EfficientNetB0-Yolov3)`：请查看原工程。
+8. Start training by using the command line: `darknet.exe detector train data/obj.data yolo-obj.cfg yolov4.conv.137`
+     
+   To train on Linux use command: `./darknet detector train data/obj.data yolo-obj.cfg yolov4.conv.137` (just use `./darknet` instead of `darknet.exe`)
+     
+   * (file `yolo-obj_last.weights` will be saved to the `build\darknet\x64\backup\` for each 100 iterations)
+   * (file `yolo-obj_xxxx.weights` will be saved to the `build\darknet\x64\backup\` for each 1000 iterations)
+   * (to disable Loss-Window use `darknet.exe detector train data/obj.data yolo-obj.cfg yolov4.conv.137 -dont_show`, if you train on computer without monitor like a cloud Amazon EC2)
+   * (to see the mAP & Loss-chart during training on remote server without GUI, use command `darknet.exe detector train data/obj.data yolo-obj.cfg yolov4.conv.137 -dont_show -mjpeg_port 8090 -map` then open URL `http://ip-address:8090` in Chrome/Firefox browser)
 
-8. 使用以下命令行开始训练: `darknet.exe detector train data/obj.data yolo-obj.cfg darknet53.conv.74`。
+8.1. For training with mAP (mean average precisions) calculation for each 4 Epochs (set `valid=valid.txt` or `train.txt` in `obj.data` file) and run: `darknet.exe detector train data/obj.data yolo-obj.cfg yolov4.conv.137 -map`
 
-    对于linux用户使用以下命令开始训练: `./darknet detector train data/obj.data yolo-obj.cfg darknet53.conv.74` (使用`./darknet` 而不是 `darknet.exe`)。
+9. After training is complete - get result `yolo-obj_final.weights` from path `build\darknet\x64\backup\`
 
-    - 权重文件 `yolo-obj_last.weights` 将会保存在 `build\darknet\x64\backup\` 文件夹中，每100个迭代保存一次。
-    - 权重文件`yolo-obj_xxxx.weights` 将会保存在 `build\darknet\x64\backup\` 文件夹中，每1000个迭代保存一次。
-    - 如果不想在训练的过程中同步展示loss曲线，请执行以下命令 `darknet.exe detector train data/obj.data yolo-obj.cfg darknet53.conv.74 -dont_show`。
-    - 如果想在训练过程中查看mAP和Loss曲线，可以使用以下命令：`darknet.exe detector train data/obj.data yolo-obj.cfg darknet53.conv.74 -dont_show -mjpeg_port 8090 -map` ，然后在浏览器中打开 URL `http://ip-address:8090` 。
+ * After each 100 iterations you can stop and later start training from this point. For example, after 2000 iterations you can stop training, and later just start training using: `darknet.exe detector train data/obj.data yolo-obj.cfg backup\yolo-obj_2000.weights`
 
-    如果想训练的过程中同步显示mAP（每四个epoch进行一次更新），运行命令: `darknet.exe detector train data/obj.data yolo-obj.cfg darknet53.conv.74 -map`。
+    (in the original repository https://github.com/pjreddie/darknet the weights-file is saved only once every 10 000 iterations `if(iterations > 1000)`)
 
-9. 训练结束以后，将会在文件夹`build\darknet\x64\backup\`中得到权重文件 `yolo-obj_final.weights` 。
+ * Also you can get result earlier than all 45000 iterations.
+ 
+ **Note:** If during training you see `nan` values for `avg` (loss) field - then training goes wrong, but if `nan` is in some other lines - then training goes well.
+ 
+ **Note:** If you changed width= or height= in your cfg-file, then new width and height must be divisible by 32.
+ 
+ **Note:** After training use such command for detection: `darknet.exe detector test data/obj.data yolo-obj.cfg yolo-obj_8000.weights`
+ 
+  **Note:** if error `Out of memory` occurs then in `.cfg`-file you should increase `subdivisions=16`, 32 or 64: [link](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L4)
+ 
+### How to train tiny-yolo (to detect your custom objects):
 
-- 在100次迭代以后，你可以停下来，然后从这个点加载模型继续训练。比如说, 你在2000次迭代以后停止训练，如果你之后想要恢复训练，只需要运行命令： `darknet.exe detector train data/obj.data yolo-obj.cfg backup\yolo-obj_2000.weights`，而不需要重头开始训练。
+Do all the same steps as for the full yolo model as described above. With the exception of:
+* Download file with the first 29-convolutional layers of yolov4-tiny: https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v4_pre/yolov4-tiny.conv.29
+ (Or get this file from yolov4-tiny.weights file by using command: `darknet.exe partial cfg/yolov4-tiny-custom.cfg yolov4-tiny.weights yolov4-tiny.conv.29 29`
+* Make your custom model `yolov4-tiny-obj.cfg` based on `cfg/yolov4-tiny-custom.cfg` instead of `yolov4.cfg`
+* Start training: `darknet.exe detector train data/obj.data yolov4-tiny-obj.cfg yolov4-tiny.conv.29`
 
-**注意**：
+For training Yolo based on other models ([DenseNet201-Yolo](https://github.com/AlexeyAB/darknet/blob/master/build/darknet/x64/densenet201_yolo.cfg) or [ResNet50-Yolo](https://github.com/AlexeyAB/darknet/blob/master/build/darknet/x64/resnet50_yolo.cfg)), you can download and get pre-trained weights as showed in this file: https://github.com/AlexeyAB/darknet/blob/master/build/darknet/x64/partial.cmd
+If you made you custom model that isn't based on other models, then you can train it without pre-trained weights, then will be used random initial weights.
+ 
+## When should I stop training:
 
-1. 如果在训练的过程中，发现`avg`指标变为`nan`，那证明训练过程有误，可能是数据标注越界导致的问题。但是其他指标有`nan`是正常的。
-2. 修改`width`,` height`的时候必须要保证两者都能够被32整除。
-3. 训练结束后，可以使用以下命令来进行测试：`darknet.exe detector test data/obj.data yolo-obj.cfg yolo-obj_8000.weights`
-4. 如果出现`Ouf of memery`问题，那说明显卡的显存不够，你可以通过设置`subdivisions`参数，将其从原来的`16`提高为`32`或者`64`，这样就能降低使用的显存，保证程序正常运行。
+Usually sufficient 2000 iterations for each class(object), but not less than number of training images and not less than 6000 iterations in total. But for a more precise definition when you should stop training, use the following manual:
 
-### 6.4 训练tiny-yolo
+1. During training, you will see varying indicators of error, and you should stop when no longer decreases **0.XXXXXXX avg**:
 
-训练tiny yolo与以上的训练过程并无明显区别，除了以下几点：
+  > Region Avg IOU: 0.798363, Class: 0.893232, Obj: 0.700808, No Obj: 0.004567, Avg Recall: 1.000000,  count: 8
+  > Region Avg IOU: 0.800677, Class: 0.892181, Obj: 0.701590, No Obj: 0.004574, Avg Recall: 1.000000,  count: 8
+  >
+  > **9002**: 0.211667, **0.60730 avg**, 0.001000 rate, 3.868000 seconds, 576128 images
+  > Loaded: 0.000000 seconds
 
-- 下载tiny yolo的预训练权重：`https://pjreddie.com/media/files/yolov3-tiny.weights`
-- 使用以下命令行来获取预训练权重: `darknet.exe partial cfg/yolov3-tiny.cfg yolov3-tiny.weights yolov3-tiny.conv.15 15`， 这里的15代表前15个层，也就是backbone所在的层。
-- 使用的配置文件应该是 `cfg/yolov3-tiny_obj.cfg` 而不是 `yolov3.cfg`
-- 使用以下命令开始训练: `darknet.exe detector train data/obj.data yolov3-tiny-obj.cfg yolov3-tiny.conv.15`
+  * **9002** - iteration number (number of batch)
+  * **0.60730 avg** - average loss (error) - **the lower, the better**
 
-如果想使用其他backbone进行训练比如 DenseNet201-Yolo或者ResNet50-Yolo, 你可以在以下链接中找到:` https://github.com/AlexeyAB/darknet/blob/master/build/darknet/x64/partial.cmd`
+  When you see that average loss **0.xxxxxx avg** no longer decreases at many iterations then you should stop training. The final avgerage loss can be from `0.05` (for a small model and easy dataset) to `3.0` (for a big model and a difficult dataset).
+  
+  Or if you train with flag `-map` then you will see mAP indicator `Last accuracy mAP@0.5 = 18.50%` in the console - this indicator is better than Loss, so train while mAP increases. 
 
-如果你采用的是自己设计的backbone,那就无法进行迁移学习，backbone可以直接进行参数随机初始化。
+2. Once training is stopped, you should take some of last `.weights`-files from `darknet\build\darknet\x64\backup` and choose the best of them:
 
-### 6.5 什么时候停止训练
+For example, you stopped training after 9000 iterations, but the best result can give one of previous weights (7000, 8000, 9000). It can happen due to overfitting. **Overfitting** - is case when you can detect objects on images from training-dataset, but can't detect objects on any others images. You should get weights from **Early Stopping Point**:
 
-建议为每个类分配至少2000次迭代，但是整体迭代次数不应少于4000次。如果想要更加精准地定义什么时候该停止训练，需要使用以下方法：
+![Overfitting](https://hsto.org/files/5dc/7ae/7fa/5dc7ae7fad9d4e3eb3a484c58bfc1ff5.png) 
 
-1. 训练过程中，你将会看到日志中有很多错误的度量指标，你需要在avg指标不再下降的时候停止训练，如下图所示:
+To get weights from Early Stopping Point:
 
-> Region Avg IOU: 0.798363, Class: 0.893232, Obj: 0.700808, No Obj: 0.004567, Avg Recall: 1.000000,  count: 8
-> Region Avg IOU: 0.800677, Class: 0.892181, Obj: 0.701590, No Obj: 0.004574, Avg Recall: 1.000000,  count: 8
->
-> **9002**: 0.211667, **0.60730 avg**, 0.001000 rate, 3.868000 seconds, 576128 images
-> Loaded: 0.000000 seconds
+  2.1. At first, in your file `obj.data` you must specify the path to the validation dataset `valid = valid.txt` (format of `valid.txt` as in `train.txt`), and if you haven't validation images, just copy `data\train.txt` to `data\valid.txt`.
 
-- **9002** - 代表当前的迭代次数。
+  2.2 If training is stopped after 9000 iterations, to validate some of previous weights use this commands:
 
-- **0.60730 avg** - average loss (error) - **这个指标是平均loss, 其越低越好。**
+(If you use another GitHub repository, then use `darknet.exe detector recall`... instead of `darknet.exe detector map`...)
 
-    在这个指标不再下降的时候就可以停止训练了。最终的值大概分布在0.05-3.0之间，小而简单的模型通常最终loss比较小，大而复杂的loss可能会比较大。
+* `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights`
+* `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_8000.weights`
+* `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_9000.weights`
 
-训练完成后，你就可以从 `darknet\build\darknet\x64\backup` 文件夹中取出比较靠后的几个`weights`文件，并对他们进行测试，选择最好的权重文件。
+And comapre last output lines for each weights (7000, 8000, 9000):
 
-举个例子，你在`9000`次迭代后停止训练，但最好的权重可能是`7000,8000,9000`次的值。这种情况的出现是由于**过拟合**导致的。**过拟合**是由于过度学习训练集的分布，而降低了模型在测试集的泛化能力。
+Choose weights-file **with the highest mAP (mean average precision)** or IoU (intersect over union)
 
- **Early Stopping Point**示意图:
+For example, **bigger mAP** gives weights `yolo-obj_8000.weights` - then **use this weights for detection**.
 
-![Overfitting](https://img-blog.csdnimg.cn/20200113222438454.png) 
+Or just train with `-map` flag: 
 
-为了得到在early stopping point处的权重：
+`darknet.exe detector train data/obj.data yolo-obj.cfg yolov4.conv.137 -map` 
 
-2.1 首先，你的obj.data文件中应该含有valid=valid.txt一项，用于测试在验证集的准确率。如果你没有验证集图片，那就直接复制train.txt重命名为valid.txt。
+So you will see mAP-chart (red-line) in the Loss-chart Window. mAP will be calculated for each 4 Epochs using `valid=valid.txt` file that is specified in `obj.data` file (`1 Epoch = images_in_train_txt / batch` iterations)
 
-2.2 假如你选择在`9000`次迭代后停止，那可以通过以下命令测试`7000,8000,9000`三个模型的相关指标。选择最高`mAP`或者最高`IoU`的模型最为最终模型。
+(to change the max x-axis value - change [`max_batches=`](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L20) parameter to `2000*classes`, f.e. `max_batches=6000` for 3 classes)
 
-- `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_7000.weights`
-- `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_8000.weights`
-- `darknet.exe detector map data/obj.data yolo-obj.cfg backup\yolo-obj_9000.weights`
+![loss_chart_map_chart](https://hsto.org/webt/yd/vl/ag/ydvlagutof2zcnjodstgroen8ac.jpeg)
 
-或者你可以选择使用`-map`标志符来直接实时测试mAP值：
+Example of custom object detection: `darknet.exe detector test data/obj.data yolo-obj.cfg yolo-obj_8000.weights`
 
-`darknet.exe detector train data/obj.data yolo-obj.cfg darknet53.conv.74 -map` 
+* **IoU** (intersect over union) - average instersect over union of objects and detections for a certain threshold = 0.24
 
-然后你就能得到loss曲线和mAP曲线，mAP每4个epoch对验证集进行一次测试，并将结果显示在图中。
+* **mAP** (mean average precision) - mean value of `average precisions` for each class, where `average precision` is average value of 11 points on PR-curve for each possible threshold (each probability of detection) for the same class (Precision-Recall in terms of PascalVOC, where Precision=TP/(TP+FP) and Recall=TP/(TP+FN) ), page-11: http://homepages.inf.ed.ac.uk/ckiw/postscript/ijcv_voc09.pdf
 
-![loss_chart_map_chart](https://img-blog.csdnimg.cn/20200113222536867.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
+**mAP** is default metric of precision in the PascalVOC competition, **this is the same as AP50** metric in the MS COCO competition.
+In terms of Wiki, indicators Precision and Recall have a slightly different meaning than in the PascalVOC competition, but **IoU always has the same meaning**.
 
-指标解释
+![precision_recall_iou](https://hsto.org/files/ca8/866/d76/ca8866d76fb840228940dbf442a7f06a.jpg)
 
-- **IoU** (intersect over union) - 平均交并比
-- **mAP** (mean average precision) - 每个类的平均精度。具体解释请参考之前的文章：[目标检测算法之常见评价指标(mAP)的详细计算方法及代码解析](<https://mp.weixin.qq.com/s?__biz=MzA4MjY4NTk0NQ==&mid=2247484531&idx=2&sn=af042401e92ed1cb5127ef1784971932&chksm=9f80bee5a8f737f30eb45d673720247f8fb678f9f35c6f41fdb8193f69f7d2b6c3f2465769a4&token=1775499637&lang=zh_CN#rd>)
 
-**mAP** 是Pascal VOC竞赛的默认指标，与MS COCO竞赛中的AP50指标是一致的。
+### Custom object detection:
 
-Precision和Recall参数在Pascal VOC竞赛中略微不同，但 **IoU 的意义都是相同的**.
+Example of custom object detection: `darknet.exe detector test data/obj.data yolo-obj.cfg yolo-obj_8000.weights`
 
-![precision_recall_iou](https://img-blog.csdnimg.cn/2020011322255870.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
+| ![Yolo_v2_training](https://hsto.org/files/d12/1e7/515/d121e7515f6a4eb694913f10de5f2b61.jpg) | ![Yolo_v2_training](https://hsto.org/files/727/c7e/5e9/727c7e5e99bf4d4aa34027bb6a5e4bab.jpg) |
+|---|---|
 
-### 6.6 如何在pascal voc2007数据集上计算mAP指标
+## How to improve object detection:
 
-1. 在VOC2007中计算mAP：
+1. Before training:
 
-- 下载VOC数据集，安装python并且下载``2007_test.txt`文件，具体可以参考链接：`https://github.com/AlexeyAB/darknet#how-to-train-pascal-voc-data`
+* set flag `random=1` in your `.cfg`-file - it will increase precision by training Yolo for different resolutions: [link](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L788)
 
-- 下载文件 `https://raw.githubusercontent.com/AlexeyAB/darknet/master/scripts/voc_label_difficult.py` 到 `build\darknet\x64\data\` 文件夹，然后运行 `voc_label_difficult.py` 从而得到 `difficult_2007_test.txt`。
+* increase network resolution in your `.cfg`-file (`height=608`, `width=608` or any value multiple of 32) - it will increase precision
 
-- 将下面voc.data文件中的第四行#删除
+* check that each object that you want to detect is mandatory labeled in your dataset - no one object in your data set should not be without label. In the most training issues - there are wrong labels in your dataset (got labels by using some conversion script, marked with a third-party tool, ...). Always check your dataset by using: https://github.com/AlexeyAB/Yolo_mark
 
-    ```
-    classes= 20
-    train  = data/train_voc.txt
-    valid  = data/2007_test.txt
-    #difficult = data/difficult_2007_test.txt
-    names = data/voc.names
-    backup = backup/
-    ```
+* my Loss is very high and mAP is very low, is training wrong? Run training with ` -show_imgs` flag at the end of training command, do you see correct bounded boxes of objects (in windows or in files `aug_...jpg`)? If no - your training dataset is wrong.
 
-- 然后就有两个方法来计算得到mAP:
+* for each object which you want to detect - there must be at least 1 similar object in the Training dataset with about the same: shape, side of object, relative size, angle of rotation, tilt, illumination. So desirable that your training dataset include images with objects at diffrent: scales, rotations, lightings, from different sides, on different backgrounds - you should preferably have 2000 different images for each class or more, and you should train `2000*classes` iterations or more
 
-    1. 使用Darknet + Python: 运行 `build/darknet/x64/calc_mAP_voc_py.cmd` ，你将得到 `yolo-voc.cfg` 模型的mAP值, mAP = 75.9%
-    2. 直接使用命令: 运行文件 `build/darknet/x64/calc_mAP.cmd` -你将得到 `yolo-voc.cfg` 模型, 得到mAP = 75.8%
+* desirable that your training dataset include images with non-labeled objects that you do not want to detect - negative samples without bounded box (empty `.txt` files) - use as many images of negative samples as there are images with objects
 
-- YOLOv3的论文：`https://arxiv.org/pdf/1612.08242v1.pdf`指出对于416x416的YOLOv2，Pascal Voc上的mAP值是76.8%。我们得到的值较低，可能是由于模型在进行检测时的代码略有不同。
+* What is the best way to mark objects: label only the visible part of the object, or label the visible and overlapped part of the object, or label a little more than the entire object (with a little gap)? Mark as you like - how would you like it to be detected.
 
-- 如果你想为`tiny-yolo-voc`计算mAP值，将脚本中`tiny-yolo-voc.cfg`取消注释，将`yolo-voc.cfg`注释掉。
+* for training with a large number of objects in each image, add the parameter `max=200` or higher value in the last `[yolo]`-layer or `[region]`-layer in your cfg-file (the global maximum number of objects that can be detected by YoloV3 is `0,0615234375*(width*height)` where are width and height are parameters from `[net]` section in cfg-file) 
+  
+* for training for small objects (smaller than 16x16 after the image is resized to 416x416) - set `layers = 23` instead of https://github.com/AlexeyAB/darknet/blob/6f718c257815a984253346bba8fb7aa756c55090/cfg/yolov4.cfg#L895
+  * set `stride=4` instead of https://github.com/AlexeyAB/darknet/blob/6f718c257815a984253346bba8fb7aa756c55090/cfg/yolov4.cfg#L892
+  * set `stride=4` instead of https://github.com/AlexeyAB/darknet/blob/6f718c257815a984253346bba8fb7aa756c55090/cfg/yolov4.cfg#L989
+  
+* for training for both small and large objects use modified models:
+  * Full-model: 5 yolo layers: https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3_5l.cfg
+  * Tiny-model: 3 yolo layers: https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny_3l.cfg
+  * YOLOv4: 3 yolo layers: https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-custom.cfg
+  
+* If you train the model to distinguish Left and Right objects as separate classes (left/right hand, left/right-turn on road signs, ...) then for disabling flip data augmentation - add `flip=0` here: https://github.com/AlexeyAB/darknet/blob/3d2d0a7c98dbc8923d9ff705b81ff4f7940ea6ff/cfg/yolov3.cfg#L17
+  
+* General rule - your training dataset should include such a set of relative sizes of objects that you want to detect: 
+  * `train_network_width * train_obj_width / train_image_width ~= detection_network_width * detection_obj_width / detection_image_width`
+  * `train_network_height * train_obj_height / train_image_height ~= detection_network_height * detection_obj_height / detection_image_height`
 
-- 如果你是用的是python 2.x 而不是python 3.x, 而且你选择使用Darknet+Python的方式来计算mAP, 那你应该使用 `reval_voc.py` 和 `voc_eval.py` 而不是使用 `reval_voc_py3.py` 和 `voc_eval_py3.py` 。以上脚本来自以下目录：` https://github.com/AlexeyAB/darknet/tree/master/scripts`。
+  I.e. for each object from Test dataset there must be at least 1 object in the Training dataset with the same class_id and about the same relative size:
 
-- 目标检测的例子：`darknet.exe detector test data/obj.data yolo-obj.cfg yolo-obj_8000.weights`
+  `object width in percent from Training dataset` ~= `object width in percent from Test dataset` 
 
-![](https://img-blog.csdnimg.cn/20200113222626288.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
+  That is, if only objects that occupied 80-90% of the image were present in the training set, then the trained network will not be able to detect objects that occupy 1-10% of the image.
 
+* to speedup training (with decreasing detection accuracy) set param `stopbackward=1` for layer-136 in cfg-file
 
+* each: `model of object, side, illimination, scale, each 30 grad` of the turn and inclination angles - these are *different objects* from an internal perspective of the neural network. So the more *different objects* you want to detect, the more complex network model should be used.
 
-![](https://img-blog.csdnimg.cn/20200113222644372.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0REX1BQX0pK,size_16,color_FFFFFF,t_70)
+* to make the detected bounded boxes more accurate, you can add 3 parameters `ignore_thresh = .9 iou_normalizer=0.5 iou_loss=giou` to each `[yolo]` layer and train, it will increase mAP@0.9, but decrease mAP@0.5.
 
-## 7. 如何提升目标检测性能？
+* Only if you are an **expert** in neural detection networks - recalculate anchors for your dataset for `width` and `height` from cfg-file:
+`darknet.exe detector calc_anchors data/obj.data -num_of_clusters 9 -width 416 -height 416`
+then set the same 9 `anchors` in each of 3 `[yolo]`-layers in your cfg-file. But you should change indexes of anchors `masks=` for each [yolo]-layer, so for YOLOv4 the 1st-[yolo]-layer has anchors smaller than 30x30, 2nd smaller than 60x60, 3rd remaining, and vice versa for YOLOv3. Also you should change the `filters=(classes + 5)*<number of mask>` before each [yolo]-layer. If many of the calculated anchors do not fit under the appropriate layers - then just try using all the default anchors.
 
-1. 训练之前：
+2. After training - for detection:
 
-    - 在`cfg`文件中将`random`设为1：这将在Yolo中使用多尺度训练，会提升检测模型准确率。
+* Increase network-resolution by set in your `.cfg`-file (`height=608` and `width=608`) or (`height=832` and `width=832`) or (any value multiple of 32) - this increases the precision and makes it possible to detect small objects: [link](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L8-L9)
 
-    - 在`cfg`文件中把输入分辨率增大(`height=608`, `width=608`或者其他任意32的倍数)：这将提升检测模型准确率。
+* it is not necessary to train the network again, just use `.weights`-file already trained for 416x416 resolution
 
-    - 检查你要检测的每个目标在数据集中是否被标记，数据集中任何目标都不应该没有标签。在大多数训练出问题的情况中基本都是有错误的标签（通过使用某些转换脚本，使用第三方工具标注来获得标签），可以通过`https://github.com/AlexeyAB/Yolo_mark`来检查你的数据集是否全部标注正确。
+* to get even greater accuracy you should train with higher resolution 608x608 or 832x832, note: if error `Out of memory` occurs then in `.cfg`-file you should increase `subdivisions=16`, 32 or 64: [link](https://github.com/AlexeyAB/darknet/blob/0039fd26786ab5f71d5af725fc18b3f521e7acfd/cfg/yolov3.cfg#L4)
 
-    - 我的损失函数很高并且mAP很低，训练出错了吗？在训练命令末端使用`-show_imgs` 标志来运行训练，你是否能看到有正确的边界预测框的目标（在窗口或者`aug_...jpg`）？如果没有，训练是发生错误了。
+## How to mark bounded boxes of objects and create annotation files:
 
-    - 对于你要检测的每个目标，训练数据集中必须至少有一个相似的目标，它们具有大致相同的形状，物体侧面姿态，相对大小，旋转角度，倾斜度，照明度等。理想的是，你的训练数据集包括具有不同比例，旋转角度，照明度，物体侧面姿态和处于不同背景的目标图像，你最好拥有2000张不同的图像，并且至少训练`2000×classes`轮次。
+Here you can find repository with GUI-software for marking bounded boxes of objects and generating annotation files for Yolo v2 - v4: https://github.com/AlexeyAB/Yolo_mark
 
-    - 希望你的训练数据集图片包含你不想检测的未标注的目标，也即是无边界框的负样本图片(空的`.txt`文件)，并且负样本图片的数量和带有目标的正样本图片数量最好一样多。
+With example of: `train.txt`, `obj.names`, `obj.data`, `yolo-obj.cfg`, `air`1-6`.txt`, `bird`1-4`.txt` for 2 classes of objects (air, bird) and `train_obj.cmd` with example how to train this image-set with Yolo v2 - v4
 
-    - 标注目标的最佳方法是：仅仅标记目标的可见部分或者标记目标的可见和重叠部分，或标记比整个目标多一点(有一点间隙)?根据你希望如何检测目标来进行标记。
+Different tools for marking objects in images:
 
-    - 为了对图片中包含大量目标的数据进行训练，添加`max=200`或者更高的值在你`cfg`文件中`yolo`层或者`region`层的最后一行（YOLOv3可以检测到的目标全局最大数量为`0,0615234375*(width*height)`其中`width`和`height`是在`cfg`文件中的`[net]`部分指定的）。
+1. in C++: https://github.com/AlexeyAB/Yolo_mark
+2. in Python: https://github.com/tzutalin/labelImg
+3. in Python: https://github.com/Cartucho/OpenLabeling
+4. in C++: https://www.ccoderun.ca/darkmark/
+5. in JavaScript: https://github.com/opencv/cvat
+6. in C++: https://github.com/jveitchmichaelis/deeplabel
+7. in C#: https://github.com/BMW-InnovationLab/BMW-Labeltool-Lite
+8. DL-Annotator for Windows ($30): [url](https://www.microsoft.com/en-us/p/dlannotator/9nsx79m7t8fn?activetab=pivot:overviewtab)
+9. v7labs - the greatest cloud labeling tool ($1.5 per hour): https://www.v7labs.com/
 
-    - 对于小目标的训练（把图像resize到416x416大小后小于16x16的目标）：设置``layers = -1, 11``而不是`layers=-1, 36`；设置`stride=4`而不是`stride=2`。
+## How to use Yolo as DLL and SO libraries
 
-    - 对于既有大目标又有小目标的训练使用下面的模型：
+* on Linux
+  * using `build.sh` or
+  * build `darknet` using `cmake` or
+  * set `LIBSO=1` in the `Makefile` and do `make`
+* on Windows
+  * using `build.ps1` or
+  * build `darknet` using `cmake` or
+  * compile `build\darknet\yolo_cpp_dll.sln` solution or `build\darknet\yolo_cpp_dll_no_gpu.sln` solution
 
-        - 完整模型（5个yolo层）：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3_5l.cfg`。
-        - Tiny模型（3个yolo层）：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-tiny_3l.cfg`。
-        - 带空间金字塔池化的完整模型（3个yolo层）：` https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov3-spp.cfg`。
+There are 2 APIs:
 
-    - 如果你要训练模型将左右目标分为单独的类别（左/右手，左/右交通标志），那就禁用翻转的数据扩充方式，即在数据输入部分添加`flip=0`。
+* C API: https://github.com/AlexeyAB/darknet/blob/master/include/darknet.h
+  * Python examples using the C API:
+    * https://github.com/AlexeyAB/darknet/blob/master/darknet.py
+    * https://github.com/AlexeyAB/darknet/blob/master/darknet_video.py
 
-    - 一般规则：你的训练数据集应包括一组您想要检测的相对大小的目标，如下：
+* C++ API: https://github.com/AlexeyAB/darknet/blob/master/include/yolo_v2_class.hpp
+  * C++ example that uses C++ API: https://github.com/AlexeyAB/darknet/blob/master/src/yolo_console_dll.cpp
 
-        - `train_network_width * train_obj_width / train_image_width ~= 
-            detection_network_width * detection_obj_width / detection_image_width`
-        - `train_network_height * train_obj_height / train_image_height ~= 
-            detection_network_height * detection_obj_height / detection_image_height`
+----
 
-        即，对于测试集中的每个目标，训练集中必须至少有一个同类目标和它具有大约相同的尺寸：
+1. To compile Yolo as C++ DLL-file `yolo_cpp_dll.dll` - open the solution `build\darknet\yolo_cpp_dll.sln`, set **x64** and **Release**, and do the: Build -> Build yolo_cpp_dll
+    * You should have installed **CUDA 10.0**
+    * To use cuDNN do: (right click on project) -> properties -> C/C++ -> Preprocessor -> Preprocessor Definitions, and add at the beginning of line: `CUDNN;`
 
-        `object width in percent from Training dataset` ~= `object width in percent from Test dataset`
+2. To use Yolo as DLL-file in your C++ console application - open the solution `build\darknet\yolo_console_dll.sln`, set **x64** and **Release**, and do the: Build -> Build yolo_console_dll
 
-        也就是说，如果训练集中仅存在占图像比例80%-90%的目标，则训练后的目标检测网络将无法检测到占图像比例为1-10%的目标。
+    * you can run your console application from Windows Explorer `build\darknet\x64\yolo_console_dll.exe`
+    **use this command**: `yolo_console_dll.exe data/coco.names yolov4.cfg yolov4.weights test.mp4`
 
-    - 为了加快训练速度（同时会降低检测精度）使用微调而不是迁移学习，在[net]下面设置`stopbackward=1`。然后执行下面的命令：`./darknet partial cfg/yolov3.cfg yolov3.weights yolov3.conv.81 81`这将会创建`yolov3.conv.81`文件，然后使用`yolov3.conv.81`文件进行训练而不是`darknet53.conv.74`。
+    * after launching your console application and entering the image file name - you will see info for each object: 
+    `<obj_id> <left_x> <top_y> <width> <height> <probability>`
+    * to use simple OpenCV-GUI you should uncomment line `//#define OPENCV` in `yolo_console_dll.cpp`-file: [link](https://github.com/AlexeyAB/darknet/blob/a6cbaeecde40f91ddc3ea09aa26a03ab5bbf8ba8/src/yolo_console_dll.cpp#L5)
+    * you can see source code of simple example for detection on the video file: [link](https://github.com/AlexeyAB/darknet/blob/ab1c5f9e57b4175f29a6ef39e7e68987d3e98704/src/yolo_console_dll.cpp#L75)
 
-    - 在观察目标的时候，从不同的方向、不同的照明情况、不同尺度、不同的转角和倾斜角度来看，对神经网络来说，它们都是不同的目标。因此，要检测的目标越多，应使用越复杂的网络模型。
+`yolo_cpp_dll.dll`-API: [link](https://github.com/AlexeyAB/darknet/blob/master/src/yolo_v2_class.hpp#L42)
 
-    - 为了让检测框更准，你可以在每个`yolo`层添加下面三个参数`ignore_thresh = .9 iou_normalizer=0.5 iou_loss=giou`，这回提高map@0.9，但会降低map@0.5。
-
-    - 当你是神经网络方面的专家时，可以重新计算相对于`width`和`height`的`anchors`：`darknet.exe detector calc_anchors data/obj.data -num_of_clusters 9 -width 416 -height 416`然后在3个`[yolo]`层放置这9个`anchors`。但是你需要修改每个`[yolo]`层的`masks`参数，让第一个`[yolo]`层的`anchors`尺寸大于60x60，第二个`[yolo]`层的`anchors`尺寸大于30x30，剩下就是第三个`[yolo]`层的`mask`。宁外，你需要修改每一个`[yolo]`层前面的`filters=(classes + 5)x<number of mask>`。如果很多计算的`anchors`都找不到合适的层，那还是使用Yolo的默认`anchors`吧。
-
-2. 训练之后：
-
-    - 通过在`.cfg`文件中设置（`height=608` and `width=608`）或者（`height=832` and `width=832`）或者任何32的倍数，这会提升准确率并使得对小目标的检测更加容易。
-        - 没有必要重新训练模型，直接使用用`416x416`分辨率训练出来的`.weights`模型文件。
-        - 但是要获得更高的准确率，你应该使用`608x608`或者`832x832`来训练，注意如果`Out of memory`发生了，你应该在`.cfg`文件中增加`subdivisions=16，32，64`。
-
-## 8. 如何标注以及创建标注文件
-
-下面的工程提供了用于标记目标边界框并为YOLO v2&v3 生成标注文件的带图像界面软件，地址为：`https://github.com/AlexeyAB/Yolo_mark`。
-
-例如对于只有两类目标的数据集标注后有以下文件`train.txt`,`obj.names`,`obj.data`,`yolo-obj.cfg`,`air 1-6.txt`,`bird 1-4.txt`，接着配合`train_obj.cmd`就可以使用YOLO v2和YOLO v3来训练这个数据集了。
-
-下面提供了5重常见的目标标注工具：
-
-- C++实现的：`https://github.com/AlexeyAB/Yolo_mark`
-- Python实现的：`https://github.com/tzutalin/labelImg`
-- Python实现的：`https://github.com/Cartucho/OpenLabeling`
-- C++实现的：`https://www.ccoderun.ca/darkmark/`
-- JavaScript实现的：`https://github.com/opencv/cvat`
-
-## 9. 使用YOLO9000
-
-同时检测和分类9000个目标：`darknet.exe detector test cfg/combine9k.data cfg/yolo9000.cfg yolo9000.weights data/dog.jpg`
-
-- `yolo9000.weights`：186Mb的YOLO9000模型需要4G GPU显存，训练好的模型下载地址：`http://pjreddie.com/media/files/yolo9000.weights`。
-
-- `yolo9000.cfg`：YOLO9000的c网络结构文件，同时这里也有`9k.tree`和`coco9k.map`文件的路径。
-
-    ```
-    tree=data/9k.tree
-    map = data/coco9k.map
-    ```
-
-    - `9k.tree`：9418个类别的单词数，每一行的形式为`<label> <parent_it>`，如果`parent_id==-1`那么这个标签没有父类别，地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/9k.tree`。
-    - `coco9k.map`：将MSCOCO的80个目标类别映射到`9k.tree`的文件，地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/coco9k.map`。
-
-- `combine9k.data`：数据文件，分别是`9k.labels`。`9k.names`，`inet9k.map`的路径（修改`combine9k.train.list`文件的路径为你自己的）。地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/combine9k.data`。
-
-- `9k.labels`：9418类目标的标签。地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/9k.labels`。
-
-- `9k.names`：9418类目标的名字。地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/9k.names`。
-
-- `inet9k.map`：将ImageNet的200个目标类别映射到`9k.tree`的文件，地址为：`https://raw.githubusercontent.com/AlexeyAB/darknet/master/build/darknet/x64/data/inet9k.map`。
-
-## 10. 如何将YOLO作为DLL和SO库进行使用？
-
-- 在Linux上。
-
-    - 使用`build.sh` 或者
-    - 使用`cmake`编译`darknet` 或者
-    - 将`Makefile`重的`LIBSO=0`改为`LIBSO=1`，然后执行`make`编译`darknet`
-
-- 在Windows上。
-
-    - 使用`build.ps1` 或者
-    - 使用`cmake`编译`darknet` 或者
-    - 使用`build\darknet\yolo_cpp_dll.sln`或`build\darknet\yolo_cpp_dll_no_gpu.sln`解决方法编译`darknet`
-
-- 这里有两个API：
-
-    - C API：`https://github.com/AlexeyAB/darknet/blob/master/include/darknet.h`
-        - 使用C API的Python例子：
-            - `https://github.com/AlexeyAB/darknet/blob/master/darknet.py`
-            - `https://github.com/AlexeyAB/darknet/blob/master/darknet_video.py`
-    - C++ API：`https://github.com/AlexeyAB/darknet/blob/master/include/yolo_v2_class.hpp`
-        - 使用C++ API的C++例子：`https://github.com/AlexeyAB/darknet/blob/master/src/yolo_console_dll.cpp`
-
-## 11. 附录
-
-1. 为了将Yolo编译成C++的DLL文件`yolo_cpp_dll.dll`：打开`build\darknet\yolo_cpp_dll.sln`解决方案，编译选项选**X64**和**Release**，然后执行Build->Build yolo_cpp_dll就，编译的一些前置条件为：
-
-- 安装**CUDA 10.0**。
-- 为了使用cuDNN执行以下步骤：点击工程属性->properties->C++->Preprocessor->Preprocessor Definitions，然后在开头添加一行`CUDNN`。
-
-2. 在自己的C++工程中将Yolo当成DLL文件使用：打开`build\darknet\yolo_console_dll.sln`解决方案，编译选项选**X64**和**Release**，然后执行Build->Build yolo_console_dll：
-
-    - 你可以利用Windows资源管理器运行`build\darknet\x64\yolo_console_dll.exe`可执行程序并**使用下面的命令**:  `yolo_console_dll.exe data/coco.names yolov3.cfg yolov3.weights test.mp4`
-    - 启动控制台应用程序并输入图像文件名后，你将看到每个目标的信息：`<obj_id> <left_x> <top_y> <width> <height> <probability>`
-    - 如果要使用OpenCV-GUI你应该将`yolo_console_dll.cpp`中的`//#define OPENCV`取消注释。
-    - 你可以看到视频检测例子的源代码，地址为yolo_console_dll.cpp的第75行。
-
-    `yolo_cpp_dll.dll`-API：`https://github.com/AlexeyAB/darknet/blob/master/include/yolo_v2_class.hpp`
-
-```c++
+```cpp
 struct bbox_t {
     unsigned int x, y, w, h;    // (x,y) - top-left corner, (w, h) - width & height of bounded box
     float prob;                    // confidence - probability that the object was found correctly
@@ -593,41 +727,7 @@ public:
 
 #ifdef OPENCV
         std::vector<bbox_t> detect(cv::Mat mat, float thresh = 0.2, bool use_mean = false);
-	std::shared_ptr<image_t> mat_to_image_resize(cv::Mat mat) const;
+        std::shared_ptr<image_t> mat_to_image_resize(cv::Mat mat) const;
 #endif
 };
 ```
-
-
-
-> AlexeyAB版本Darknet链接
->
-> https://github.com/AlexeyAB/darknet
-
-
-
-# 公众号源码解析
-
-- [【AlexeyAB DarkNet框架解析】一，框架总览](https://mp.weixin.qq.com/s/RruZSl49vv5B0eRif-p9HQ)
-- [【AlexeyAB DarkNet框架解析】二，数据结构解析](https://mp.weixin.qq.com/s/xcQ1enYJDdb_UdHkJqnQHQ)
-- [【AlexeyAB DarkNet框架解析】三，加载数据进行训练](https://mp.weixin.qq.com/s/Rrq3DGlcMi-TkBoIkbHh6g)
-- [【AlexeyAB DarkNet框架解析】四，网络的前向传播和反向传播介绍以及layer的详细解析](https://mp.weixin.qq.com/s/BvhXIE65ksllh4HkXCWhzg)
-- [【AlexeyAB DarkNet框架解析】五，卷积层的前向传播解析](https://mp.weixin.qq.com/s/kutGO0D7W7sfxAUTL7mtUg)
-- [【AlexeyAB DarkNet框架解析】六，卷积层的反向传播解析](https://mp.weixin.qq.com/s/NviQoG0SjMogqSm0FwoQjA)
-- [【AlexeyAB DarkNet框架解析】七，YOLOV1损失函数代码详解(detection_layer.c)](https://mp.weixin.qq.com/s/vzkKM0GczTNrUpFgNvTvjQ)
-- [【AlexeyAB DarkNet框架解析】八，YOLOV2损失函数代码详解(region_layer.c)](https://mp.weixin.qq.com/s/YvcYImkZXUafAI6lR4wATw)
-- [【AlexeyAB DarkNet框架解析】九，YOLOV3损失函数代码详解(yolo_layer.c)](https://mp.weixin.qq.com/s/gbRkSWbCtOBxWGziE_XgGw)
-- [【AlexeyAB DarkNet框架解析】十，池化层代码详解(maxpool_layer.c)](https://mp.weixin.qq.com/s/T8xZBwv8JoO90eBTbhYl5w)
-- [【AlexeyAB DarkNet框架解析】十一，BN层代码详解(batchnorm_layer.c)](https://mp.weixin.qq.com/s/AjVr6_YvLwR4PfrEM89H1Q)
-- [【AlexeyAB DarkNet框架解析】十二，Dropout层代码详解](https://mp.weixin.qq.com/s/o-_if3VEnDsIjRIa_lDf1w)
-
-
-
-
-
-“GiantPandaCV”是由两位对计算机视觉心怀热情的95后创建的，专注于深度学习基础路线，不盲目追求热点，按照科学的计算机视觉学习路线踏实而坚定地走下去。
-
-![扫码关注](https://img-blog.csdnimg.cn/20200222131102215.png)
-
-​																	**欢迎您的加入，愿与君共同成长。**
-
