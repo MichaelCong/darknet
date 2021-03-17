@@ -429,6 +429,7 @@ void visualize(char *cfgfile, char *weightfile)
 #endif
 }
 
+//框架实现分类，定位，回归，分割等功能的初始入口。
 int main(int argc, char **argv)
 {
 #ifdef _DEBUG

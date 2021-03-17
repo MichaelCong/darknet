@@ -23,14 +23,25 @@ int check_mistakes = 0;
 
 static int coco_ids[] = { 1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90 };
 
+/*
+由于训练，验证和测试阶段代码几乎是差不多的，只不过训练多了一个反向传播的过程。
+所以我们主要分析一下训练过程，训练过程是一个比较复杂的过程，不过宏观上大致分为
+解析网络配置文件，加载训练样本图像和标签，开启训练，结束训练,保存模型这样一个过程，
+代码如下：
+*/
 void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear, int dont_show, int calc_map, int mjpeg_port, int show_imgs, int benchmark_layers, char* chart_path)
 {
+    // 从options找出训练图片路径信息，如果没找到，默认使用"data/train.list"路径下的图片信息（train.list含有标准的信息格式：<object-class> <x> <y> <width> <height>），
+    // 该文件可以由darknet提供的scripts/voc_label.py根据自行在网上下载的voc数据集生成，所以说是默认路径，其实也需要使用者自行调整，也可以任意命名，不一定要为train.list，
+    // 甚至可以不用voc_label.py生成，可以自己不厌其烦的制作一个（当然规模应该是很小的，不然太累了。。。）
+    // 读入后，train_images将含有训练图片中所有图片的标签以及定位信息
     list *options = read_data_cfg(datacfg);
     char *train_images = option_find_str(options, "train", "data/train.txt");
     char *valid_images = option_find_str(options, "valid", train_images);
     char *backup_directory = option_find_str(options, "backup", "/backup/");
 
-    network net_map;
+    network net_map; 
+    //如果要计算map
     if (calc_map) {
         FILE* valid_file = fopen(valid_images, "r");
         if (!valid_file) {
@@ -40,15 +51,18 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         }
         else fclose(valid_file);
 
-        cuda_set_device(gpus[0]);
+        cuda_set_device(gpus[0]);//默认使用GPU[0]
         printf(" Prepare additional network for mAP calculation...\n");
         net_map = parse_network_cfg_custom(cfgfile, 1, 1);
         net_map.benchmark_layers = benchmark_layers;
+
+        //分类数
         const int net_classes = net_map.layers[net_map.n - 1].classes;
 
         int k;  // free memory unnecessary arrays
         for (k = 0; k < net_map.n - 1; ++k) free_layer_custom(net_map.layers[k], 1);
-
+        
+        //获取类别对应的名字
         char *name_list = option_find_str(options, "names", "data/names.list");
         int names_size = 0;
         char **names = get_labels_custom(name_list, &names_size);
@@ -61,22 +75,28 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     }
 
     srand(time(0));
+    // 提取配置文件名称中的主要信息，用于输出打印（并无实质作用），比如提取cfg/yolo.cfg中的yolo，用于下面的输出打印
     char *base = basecfg(cfgfile);
     printf("%s\n", base);
     float avg_loss = -1;
+    // 构建网络：用多少块GPU，就会构建多少个相同的网络（不使用GPU时，ngpus=1）
     float avg_contrastive_acc = 0;
     network* nets = (network*)xcalloc(ngpus, sizeof(network));
 
-    srand(time(0));
+    srand(time(0));//设定随机数种子
     int seed = rand();
     int k;
+    // for循环次数为ngpus，使用多少块GPU，就循环多少次（不使用GPU时，ngpus=1，也会循环一次）
+    // 这里每一次循环都会构建一个相同的神经网络，如果提供了初始训练参数，也会为每个网络导入相同的初始训练参数
     for (k = 0; k < ngpus; ++k) {
         srand(seed);
 #ifdef GPU
         cuda_set_device(gpus[k]);
 #endif
-        nets[k] = parse_network_cfg(cfgfile);
+        nets[k] = parse_network_cfg(cfgfile);//解析网络配置文件
+        //测试某一个网络层的相关指标如运行时间
         nets[k].benchmark_layers = benchmark_layers;
+        //如果有预训练模型则加载
         if (weightfile) {
             load_weights(&nets[k], weightfile);
         }
@@ -1942,17 +1962,17 @@ void draw_object(char *datacfg, char *cfgfile, char *weightfile, char *filename,
 
 void run_detector(int argc, char **argv)
 {
-    int dont_show = find_arg(argc, argv, "-dont_show");
-    int benchmark = find_arg(argc, argv, "-benchmark");
+    int dont_show = find_arg(argc, argv, "-dont_show");//展示图像界面
+    int benchmark = find_arg(argc, argv, "-benchmark");//评估模型的表现
     int benchmark_layers = find_arg(argc, argv, "-benchmark_layers");
     //if (benchmark_layers) benchmark = 1;
     if (benchmark) dont_show = 1;
     int show = find_arg(argc, argv, "-show");
-    int letter_box = find_arg(argc, argv, "-letter_box");
-    int calc_map = find_arg(argc, argv, "-map");
+    int letter_box = find_arg(argc, argv, "-letter_box");//是否对图像做letter-box变换
+    int calc_map = find_arg(argc, argv, "-map");//是否计算map值
     int map_points = find_int_arg(argc, argv, "-points", 0);
-    check_mistakes = find_arg(argc, argv, "-check_mistakes");
-    int show_imgs = find_arg(argc, argv, "-show_imgs");
+    check_mistakes = find_arg(argc, argv, "-check_mistakes");//检查数据是否有误
+    int show_imgs = find_arg(argc, argv, "-show_imgs");//显示图片
     int mjpeg_port = find_int_arg(argc, argv, "-mjpeg_port", -1);
     int avgframes = find_int_arg(argc, argv, "-avgframes", 3);
     int dontdraw_bbox = find_arg(argc, argv, "-dontdraw_bbox");
@@ -1961,15 +1981,15 @@ void run_detector(int argc, char **argv)
     int time_limit_sec = find_int_arg(argc, argv, "-time_limit_sec", 0);
     char *out_filename = find_char_arg(argc, argv, "-out_filename", 0);
     char *outfile = find_char_arg(argc, argv, "-out", 0);
-    char *prefix = find_char_arg(argc, argv, "-prefix", 0);
-    float thresh = find_float_arg(argc, argv, "-thresh", .25);    // 0.24
+    char *prefix = find_char_arg(argc, argv, "-prefix", 0); //模型保存的前缀
+    float thresh = find_float_arg(argc, argv, "-thresh", .25);    // 置信度0.25
     float iou_thresh = find_float_arg(argc, argv, "-iou_thresh", .5);    // 0.5 for mAP
     float hier_thresh = find_float_arg(argc, argv, "-hier", .5);
-    int cam_index = find_int_arg(argc, argv, "-c", 0);
-    int frame_skip = find_int_arg(argc, argv, "-s", 0);
+    int cam_index = find_int_arg(argc, argv, "-c", 0);//摄像头编号
+    int frame_skip = find_int_arg(argc, argv, "-s", 0);//跳帧检测间隔
     int num_of_clusters = find_int_arg(argc, argv, "-num_of_clusters", 5);
-    int width = find_int_arg(argc, argv, "-width", -1);
-    int height = find_int_arg(argc, argv, "-height", -1);
+    int width = find_int_arg(argc, argv, "-width", -1);// 输入网络的图像宽度
+    int height = find_int_arg(argc, argv, "-height", -1);// 输入网络的图像高度
     // extended output in test mode (output of rect bound coords)
     // and for recall mode (extended output table-like format with results for best_class fit)
     int ext_output = find_arg(argc, argv, "-ext_output");
@@ -1979,7 +1999,7 @@ void run_detector(int argc, char **argv)
         fprintf(stderr, "usage: %s %s [train/test/valid/demo/map] [data] [cfg] [weights (optional)]\n", argv[0], argv[1]);
         return;
     }
-    char *gpu_list = find_char_arg(argc, argv, "-gpus", 0);
+    char *gpu_list = find_char_arg(argc, argv, "-gpus", 0);// 多个gpu训练
     int *gpus = 0;
     int gpu = 0;
     int ngpus = 0;
@@ -2005,24 +2025,24 @@ void run_detector(int argc, char **argv)
 
     int clear = find_arg(argc, argv, "-clear");
 
-    char *datacfg = argv[3];
-    char *cfg = argv[4];
-    char *weights = (argc > 5) ? argv[5] : 0;
+    char *datacfg = argv[3];//存储训练集，验证集，以及类别对应名字等信息的cfg文件
+    char *cfg = argv[4];//要训练的网络cfg文件
+    char *weights = (argc > 5) ? argv[5] : 0;//是否有预训练模型
     if (weights)
         if (strlen(weights) > 0)
             if (weights[strlen(weights) - 1] == 0x0d) weights[strlen(weights) - 1] = 0;
     char *filename = (argc > 6) ? argv[6] : 0;
-    if (0 == strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers);
-    else if (0 == strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear, dont_show, calc_map, mjpeg_port, show_imgs, benchmark_layers, chart_path);
-    else if (0 == strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
-    else if (0 == strcmp(argv[2], "recall")) validate_detector_recall(datacfg, cfg, weights);
-    else if (0 == strcmp(argv[2], "map")) validate_detector_map(datacfg, cfg, weights, thresh, iou_thresh, map_points, letter_box, NULL);
-    else if (0 == strcmp(argv[2], "calc_anchors")) calc_anchors(datacfg, num_of_clusters, width, height, show);
+    if (0 == strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers);//执行目标检测模型测试
+    else if (0 == strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear, dont_show, calc_map, mjpeg_port, show_imgs, benchmark_layers, chart_path);//目标检测模型训练
+    else if (0 == strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);//目标检测模型验证
+    else if (0 == strcmp(argv[2], "recall")) validate_detector_recall(datacfg, cfg, weights);///计算验证集的召回率
+    else if (0 == strcmp(argv[2], "map")) validate_detector_map(datacfg, cfg, weights, thresh, iou_thresh, map_points, letter_box, NULL);//计算验证集的map值
+    else if (0 == strcmp(argv[2], "calc_anchors")) calc_anchors(datacfg, num_of_clusters, width, height, show);//计算验证集的anchors
     else if (0 == strcmp(argv[2], "draw")) {
         int it_num = 100;
         draw_object(datacfg, cfg, weights, filename, thresh, dont_show, it_num, letter_box, benchmark_layers);
     }
-    else if (0 == strcmp(argv[2], "demo")) {
+    else if (0 == strcmp(argv[2], "demo")) {//demo展示
         list *options = read_data_cfg(datacfg);
         int classes = option_find_int(options, "classes", 20);
         char *name_list = option_find_str(options, "names", "data/names.list");
