@@ -158,6 +158,29 @@ def convert2relative(image, bbox):
     return x/width, y/height, w/width, h/height
 
 
+# def convert2relative(image, bbox):
+#     """
+#     YOLO format use relative coordinates for annotation
+#     """
+#     x, y, w, h = bbox
+#     height, width, _ = image.shape
+#     # print( x, y, w, h,height, width)
+#     x1,y1,x2,y2 = (x-w/2)*1920/416, (y-h/2)*1440/416, (x+w/2)*1920/416, (y+h/2)*1440/416
+#     # print(int(x1), int(y1), int(x2), int(y2))
+#     if x1<0:
+#         x1 = 0
+#         print("x1:",x1)
+#     elif y1 < 0:
+#         y1 =0
+#         print("y1:",y1)
+#     elif x2 > 1920:
+#         x2 =1920
+#         print("x2:",x2)
+#     elif y2 > 1440:
+#         y2 = 1440
+#         print("y2:",y2)
+#     return int(x1), int(y1), int(x2), int(y2)
+
 def save_annotations(name, image, detections, class_names):
     """
     Files saved with image_name.txt and relative coordinates
